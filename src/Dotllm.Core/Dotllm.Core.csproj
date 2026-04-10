@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Dotllm</RootNamespace>
+    <AssemblyName>Dotllm.Core</AssemblyName>
+    <PackageId>Dotllm.Core</PackageId>
+    <Description>Native .NET runtime for local GGUF language model inference</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <PolyfillExe>false</PolyfillExe>
+    <NoWarn>CA1707,CA1720</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dotllm.Core.Tests" />
+  </ItemGroup>
+
+</Project>

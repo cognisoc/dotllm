@@ -1,0 +1,90 @@
+using System.Runtime.InteropServices;
+using Dotllm.Loading;
+using Dotllm.Models;
+using Dotllm.Tensors;
+using Dotllm.Tokenization;
+
+namespace Dotllm.Inference;
+
+public sealed class LoadedModel : IDisposable
+{
+    private readonly Stream _stream;
+    private readonly GgufModel _ggufModel;
+    private readonly Dictionary<string, Tensor> _tensors;
+    private bool _disposed;
+
+    public TransformerConfig Config { get; }
+    internal TensorNameResolver TensorNames { get; }
+    public BpeTokenizer Tokenizer { get; }
+    public ChatTemplate? ChatTemplate { get; }
+    public ModelCapabilities Capabilities { get; }
+
+    private LoadedModel(Stream stream, GgufModel ggufModel, TransformerConfig config, TensorNameResolver tensorNames, Dictionary<string, Tensor> tensors, BpeTokenizer tokenizer, ChatTemplate? chatTemplate)
+    {
+        _stream = stream;
+        _ggufModel = ggufModel;
+        Config = config;
+        TensorNames = tensorNames;
+        _tensors = tensors;
+        Tokenizer = tokenizer;
+        ChatTemplate = chatTemplate;
+        Capabilities = ModelCapabilities.FromConfig(config);
+    }
+
+    public static LoadedModel Load(Stream stream)
+    {
+        var ggufModel = GgufReader.Read(stream);
+        var config = ArchitectureResolver.Resolve(ggufModel);
+        var tensorNames = new TensorNameResolver(ggufModel.TensorInfos);
+        var tensors = LoadTensors(stream, ggufModel);
+        var tokenizer = BpeTokenizer.FromGguf(ggufModel.Metadata);
+        var chatTemplate = ChatTemplate.FromGguf(ggufModel.Metadata, tokenizer);
+
+        return new LoadedModel(stream, ggufModel, config, tensorNames, tensors, tokenizer, chatTemplate);
+    }
+
+    internal Tensor GetTensor(string name) =>
+        _tensors.TryGetValue(name, out var t) ? t : throw new KeyNotFoundException($"Tensor '{name}' not found.");
+
+    internal bool TryGetTensor(string name, out Tensor? tensor) =>
+        _tensors.TryGetValue(name, out tensor);
+
+    private static Dictionary<string, Tensor> LoadTensors(Stream stream, GgufModel model)
+    {
+        var tensors = new Dictionary<string, Tensor>(model.TensorInfos.Count, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var info in model.TensorInfos)
+        {
+            var byteCount = (long)TensorSize.ByteCount(info.Type, info.ElementCount);
+            if (byteCount == 0) continue;
+
+            var dataOffset = (long)model.TensorDataOffset + (long)info.Offset;
+            if (dataOffset + byteCount > stream.Length)
+                continue;
+
+            stream.Position = dataOffset;
+            var data = new byte[byteCount];
+            var read = stream.Read(data, 0, (int)byteCount);
+            if (read != (int)byteCount)
+                continue;
+
+            tensors[info.Name] = new Tensor
+            {
+                Name = info.Name,
+                Dimensions = info.Dimensions,
+                ElementType = info.Type,
+                Data = data,
+                ElementCount = info.ElementCount,
+            };
+        }
+
+        return tensors;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _stream.Dispose();
+    }
+}

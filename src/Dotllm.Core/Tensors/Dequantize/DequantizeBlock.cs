@@ -1,0 +1,76 @@
+using System.Runtime.InteropServices;
+using Dotllm.Tensors.Numeric;
+
+namespace Dotllm.Tensors.Dequantize;
+
+internal static class DequantizeQ4_0
+{
+    public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int numRows, int rowElements)
+    {
+        var blockElements = 32;
+        var blockSizeBytes = 18;
+        var blocksPerRow = rowElements / blockElements;
+
+        for (var r = 0; r < numRows; r++)
+        {
+            var rowOffset = r * blocksPerRow * blockSizeBytes;
+            var dstOffset = r * rowElements;
+
+            for (var b = 0; b < blocksPerRow; b++)
+            {
+                var blockOffset = rowOffset + b * blockSizeBytes;
+                var scale = HalfHelper.HalfToFloat(src, blockOffset);
+
+                for (var i = 0; i < blockElements; i++)
+                {
+                    var byteIdx = 2 + i / 2;
+                    var nibble = (src[blockOffset + byteIdx] >> ((i & 1) * 4)) & 0x0F;
+                    dst[dstOffset + b * blockElements + i] = (nibble - 8) * scale;
+                }
+            }
+        }
+    }
+}
+
+internal static class DequantizeQ8_0
+{
+    public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int numRows, int rowElements)
+    {
+        var blockElements = 32;
+        var blockSizeBytes = 34;
+        var blocksPerRow = rowElements / blockElements;
+
+        for (var r = 0; r < numRows; r++)
+        {
+            var rowOffset = r * blocksPerRow * blockSizeBytes;
+            var dstOffset = r * rowElements;
+
+            for (var b = 0; b < blocksPerRow; b++)
+            {
+                var blockOffset = rowOffset + b * blockSizeBytes;
+                var scale = HalfHelper.HalfToFloat(src, blockOffset);
+
+                for (var i = 0; i < blockElements; i++)
+                    dst[dstOffset + b * blockElements + i] = (sbyte)src[blockOffset + 2 + i] * scale;
+            }
+        }
+    }
+}
+
+internal static class DequantizeF16
+{
+    public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int count)
+    {
+        for (var i = 0; i < count; i++)
+            dst[i] = HalfHelper.HalfToFloat(src, i * 2);
+    }
+}
+
+internal static class DequantizeF32
+{
+    public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int count)
+    {
+        var srcFloats = MemoryMarshal.Cast<byte, float>(src);
+        srcFloats[..count].CopyTo(dst);
+    }
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Dotllm.Benchmarks</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dotllm.Core\Dotllm.Core.csproj" />
+  </ItemGroup>
+
+</Project>
