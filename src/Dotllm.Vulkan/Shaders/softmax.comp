@@ -1,0 +1,80 @@
+// Softmax compute shader
+// Input/Output: scores[seqLen] (in-place)
+// Uniform: softcap (0 = no softcap), seqLen
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(binding = 0) buffer ScoresBuffer { float scores[]; };
+
+layout(push_constant) uniform PushConstants {
+    float softcap;
+    uint seqLen;
+};
+
+shared float s_max[256];
+shared float s_sum[256];
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    uint local_idx = gl_LocalInvocationID.x;
+    uint group_size = gl_WorkGroupSize.x;
+
+    // Apply softcap if enabled
+    if (softcap > 0.0)
+    {
+        for (uint i = idx; i < seqLen; i += group_size * gl_NumWorkGroups_x)
+        {
+            scores[i] = softcap * tanh(scores[i] / softcap);
+        }
+    }
+
+    barrier();
+
+    // Find max
+    float thread_max = -3.402823e+38;
+    for (uint i = idx; i < seqLen; i += group_size * gl_NumWorkGroups_x)
+    {
+        thread_max = max(thread_max, scores[i]);
+    }
+
+    s_max[local_idx] = thread_max;
+    barrier();
+
+    for (uint stride = group_size / 2; stride > 0; stride >>= 1)
+    {
+        if (local_idx < stride)
+            s_max[local_idx] = max(s_max[local_idx], s_max[local_idx + stride]);
+        barrier();
+    }
+
+    float max_val = s_max[0];
+
+    // Compute exp and sum
+    float thread_sum = 0.0;
+    for (uint i = idx; i < seqLen; i += group_size * gl_NumWorkGroups_x)
+    {
+        scores[i] = exp(scores[i] - max_val);
+        thread_sum += scores[i];
+    }
+
+    s_sum[local_idx] = thread_sum;
+    barrier();
+
+    for (uint stride = group_size / 2; stride > 0; stride >>= 1)
+    {
+        if (local_idx < stride)
+            s_sum[local_idx] += s_sum[local_idx + stride];
+        barrier();
+    }
+
+    float inv_sum = 1.0 / s_sum[0];
+
+    // Normalize
+    for (uint i = idx; i < seqLen; i += group_size * gl_NumWorkGroups_x)
+    {
+        scores[i] *= inv_sum;
+    }
+}

@@ -11,6 +11,7 @@ public sealed class LoadedModel : IDisposable
     private readonly Stream _stream;
     private readonly GgufModel _ggufModel;
     private readonly Dictionary<string, Tensor> _tensors;
+    private readonly Dictionary<string, float[]> _dequantizedCache;
     private bool _disposed;
 
     public TransformerConfig Config { get; }
@@ -26,6 +27,7 @@ public sealed class LoadedModel : IDisposable
         Config = config;
         TensorNames = tensorNames;
         _tensors = tensors;
+        _dequantizedCache = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
         Tokenizer = tokenizer;
         ChatTemplate = chatTemplate;
         Capabilities = ModelCapabilities.FromConfig(config);
@@ -48,6 +50,20 @@ public sealed class LoadedModel : IDisposable
 
     internal bool TryGetTensor(string name, out Tensor? tensor) =>
         _tensors.TryGetValue(name, out tensor);
+
+    internal float[] GetDequantizedWeights(string name)
+    {
+        if (_dequantizedCache.TryGetValue(name, out var cached))
+            return cached;
+
+        var tensor = GetTensor(name);
+        var size = tensor.RowCount > 0 ? tensor.RowCount * tensor.ColumnCount : (int)tensor.ElementCount;
+        var result = new float[size];
+        var byteCount = (int)TensorSize.ByteCount(tensor.ElementType, (ulong)size);
+        TensorOps.DequantizeToFloat(tensor.Data.Span[..byteCount], result, tensor.ElementType, tensor.RowCount > 0 ? tensor.RowCount : 1, size / Math.Max(tensor.RowCount, 1));
+        _dequantizedCache[name] = result;
+        return result;
+    }
 
     private static Dictionary<string, Tensor> LoadTensors(Stream stream, GgufModel model)
     {

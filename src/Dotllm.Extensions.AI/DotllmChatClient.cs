@@ -96,6 +96,9 @@ public sealed class DotllmChatClient : IChatClient
             TopP = _options.TopP,
             RepeatPenalty = _options.RepeatPenalty,
         },
+        StopSequences = options?.StopSequences is { Count: > 0 }
+            ? options.StopSequences.ToArray()
+            : [],
     };
 
     private string FormatChatMessages(IEnumerable<ChatMessage> messages)

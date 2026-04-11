@@ -4,7 +4,7 @@ using Dotllm.Loading;
 using Dotllm.Models;
 using Dotllm.Sampling;
 using Dotllm.Tensors;
-using Dotllm.Tensors.Numeric;
+using Dotllm.Tokenization;
 
 namespace Dotllm.Inference;
 
@@ -14,6 +14,10 @@ public sealed class InferenceEngine
     private readonly TransformerConfig _cfg;
     private readonly TensorNameResolver _tn;
     private readonly IComputeBackend _backend;
+    private readonly BpeTokenizer _tokenizer;
+    private readonly float[] _ropeFreqs;
+    private KvCache _kvCache;
+    private InferenceBuffers _buffers;
 
     public InferenceEngine(LoadedModel model) : this(model, new CpuBackend()) { }
 
@@ -23,6 +27,20 @@ public sealed class InferenceEngine
         _cfg = model.Config;
         _tn = model.TensorNames;
         _backend = backend;
+        _tokenizer = model.Tokenizer;
+        _buffers = new InferenceBuffers(_cfg);
+        _kvCache = new KvCache(_cfg.LayerCount, _cfg.KvDim, _cfg.ContextLength);
+        _ropeFreqs = PrecomputeRopeFrequencies(_cfg);
+    }
+
+    private static float[] PrecomputeRopeFrequencies(TransformerConfig cfg)
+    {
+        var actualRotaryDim = cfg.RopeDimensionCount > 0 ? cfg.RopeDimensionCount : cfg.HeadDim;
+        var halfDim = actualRotaryDim / 2;
+        var freqs = new float[halfDim];
+        for (var i = 0; i < halfDim; i++)
+            freqs[i] = 1f / MathF.Pow(cfg.RopeFreqBase, 2f * i / actualRotaryDim);
+        return freqs;
     }
 
     public async IAsyncEnumerable<int> Generate(
@@ -30,31 +48,43 @@ public sealed class InferenceEngine
         GenerationOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        using var kvCache = new KvCache(_cfg.LayerCount, _cfg.KvDim, _cfg.ContextLength);
-        var buffers = new InferenceBuffers(_cfg);
+        _kvCache.Reset();
 
         foreach (var token in promptTokens)
         {
-            ProcessToken(token, 0, kvCache, buffers);
-            kvCache.Advance();
+            ProcessToken(token, 0, _kvCache, _buffers);
+            _kvCache.Advance();
         }
 
         var lastToken = promptTokens.Length > 0 ? promptTokens[^1] : 0;
         var generated = 0;
+        var stopSequences = options.StopSequences;
+        var generatedText = new System.Text.StringBuilder();
 
         while (generated < options.MaxTokens && !cancellationToken.IsCancellationRequested)
         {
-            var logits = ProcessToken(lastToken, kvCache.CurrentPosition, kvCache, buffers);
+            var logits = ProcessToken(lastToken, _kvCache.CurrentPosition, _kvCache, _buffers);
 
             if (_cfg.FinalLogitSoftcap.HasValue)
-                VectorMath.Softcap(logits, _cfg.FinalLogitSoftcap.Value);
+                _backend.Softcap(logits, _cfg.FinalLogitSoftcap.Value);
 
             var nextToken = SampleToken(logits, options.Sampling);
-            kvCache.Advance();
+            _kvCache.Advance();
             yield return nextToken;
 
             if (nextToken == _cfg.EosTokenId)
                 yield break;
+
+            if (stopSequences is { Length: > 0 })
+            {
+                generatedText.Append(_tokenizer.Decode(nextToken));
+                var text = generatedText.ToString();
+                foreach (var stop in stopSequences)
+                {
+                    if (text.Contains(stop, StringComparison.Ordinal))
+                        yield break;
+                }
+            }
 
             lastToken = nextToken;
             generated++;
@@ -66,7 +96,7 @@ public sealed class InferenceEngine
         GetEmbedding(token, buf.HiddenState);
 
         if (_cfg.EmbeddingScale != 1f)
-            VectorMath.Scale(buf.HiddenState, _cfg.EmbeddingScale);
+            _backend.Scale(buf.HiddenState, _cfg.EmbeddingScale);
 
         for (var layer = 0; layer < _cfg.LayerCount; layer++)
             ProcessLayer(layer, position, buf.HiddenState, kvCache, buf);
@@ -82,7 +112,7 @@ public sealed class InferenceEngine
         var rowBytes = (int)TensorSize.ByteCount(emb.ElementType, (ulong)rowElements);
         var offset = token * rowBytes;
         var src = emb.Data.Span.Slice(offset, rowBytes);
-        TensorOps.DequantizeToFloat(src, output.AsSpan(0, rowElements), emb.ElementType, 1, rowElements);
+        _backend.DequantizeToFloat(src, output.AsSpan(0, rowElements), emb.ElementType, 1, rowElements);
     }
 
     private void ProcessLayer(int layer, int position, float[] hiddenState, KvCache kvCache, InferenceBuffers buf)
@@ -116,10 +146,10 @@ public sealed class InferenceEngine
         var hs = hiddenState.AsSpan(0, _cfg.HiddenSize);
         ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: true);
         AttentionForward(layer, position, buf.NormBuf, kvCache, buf);
-        VectorMath.Add(hs, buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(hs, buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize));
         ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: false);
         FfnForward(layer, buf.NormBuf, buf.FfnBuf, buf.FfnResultBuf);
-        VectorMath.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
     private void ProcessGptNeoXLikeLayer(int layer, int position, float[] hiddenState, KvCache kvCache, InferenceBuffers buf)
@@ -129,8 +159,8 @@ public sealed class InferenceEngine
         AttentionForward(layer, position, buf.NormBuf, kvCache, buf);
         ApplyNorm(hs, buf.NormBuf2, layer, isAttnNorm: false);
         FfnForward(layer, buf.NormBuf2, buf.FfnBuf, buf.FfnResultBuf);
-        VectorMath.Add(buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize), buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
-        VectorMath.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize), buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
     private void ProcessGemmaLikeLayer(int layer, int position, float[] hiddenState, KvCache kvCache, InferenceBuffers buf)
@@ -138,11 +168,11 @@ public sealed class InferenceEngine
         var hs = hiddenState.AsSpan(0, _cfg.HiddenSize);
         ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: true);
         AttentionForward(layer, position, buf.NormBuf, kvCache, buf);
-        VectorMath.Add(hs, buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(hs, buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize));
         if (_cfg.HasPostNorm) ApplyPostNorm(hs, layer, isAttnPostNorm: true);
         ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: false);
         FfnForward(layer, buf.NormBuf, buf.FfnBuf, buf.FfnResultBuf);
-        VectorMath.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
         if (_cfg.HasPostNorm) ApplyPostNorm(hs, layer, isAttnPostNorm: false);
     }
 
@@ -160,11 +190,11 @@ public sealed class InferenceEngine
         var upCols = (int)(upTensor.ElementCount / (ulong)_cfg.HiddenSize);
 
         MatMulFromTensor(hs, gateTensor, buf.FfnBuf.AsSpan(0, gateCols), gateCols);
-        VectorMath.SiluInPlace(buf.FfnBuf.AsSpan(0, gateCols));
+        _backend.SiluInPlace(buf.FfnBuf.AsSpan(0, gateCols));
         MatMulFromTensor(hs, upTensor, buf.ConvBuf.AsSpan(0, upCols), upCols);
-        VectorMath.Mul(buf.FfnBuf.AsSpan(0, gateCols), buf.ConvBuf.AsSpan(0, gateCols), buf.FfnBuf.AsSpan(0, gateCols));
+        _backend.Mul(buf.FfnBuf.AsSpan(0, gateCols), buf.ConvBuf.AsSpan(0, gateCols), buf.FfnBuf.AsSpan(0, gateCols));
         MatMulFromTensor(buf.FfnBuf.AsSpan(0, gateCols), downTensor, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize), _cfg.HiddenSize);
-        VectorMath.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
+        _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
     private void AttentionForward(int layer, int position, ReadOnlySpan<float> input, KvCache kvCache, InferenceBuffers buf)
@@ -213,14 +243,14 @@ public sealed class InferenceEngine
         for (var h = 0; h < headCount; h++)
         {
             var qHead = q.Slice(h * headDim, headDim);
-            TensorOps.ApplyRoPE(qHead, qHead, headDim, position, _cfg.RopeFreqBase, _cfg.RopeDimensionCount);
+            _backend.ApplyRoPE(qHead, qHead, headDim, position, _ropeFreqs);
         }
 
         for (var h = 0; h < headCountKv; h++)
         {
             var kHead = k.Slice(h * headDim, headDim);
             var vHead = v.Slice(h * headDim, headDim);
-            TensorOps.ApplyRoPE(kHead, kHead, headDim, position, _cfg.RopeFreqBase, _cfg.RopeDimensionCount);
+            _backend.ApplyRoPE(kHead, kHead, headDim, position, _ropeFreqs);
             kHead.CopyTo(kvCache.GetKeySlot(layer, position).Slice(h * headDim, headDim));
             vHead.CopyTo(kvCache.GetValueSlot(layer, position).Slice(h * headDim, headDim));
         }
@@ -244,7 +274,7 @@ public sealed class InferenceEngine
                 scoreBuf[s] = dot / MathF.Sqrt(headDim);
             }
 
-            VectorMath.Softmax(scoreBuf[..seqLen], _cfg.AttnLogitSoftcap);
+            _backend.Softmax(scoreBuf[..seqLen], _cfg.AttnLogitSoftcap);
 
             for (var d = 0; d < headDim; d++)
             {
@@ -278,12 +308,12 @@ public sealed class InferenceEngine
             MatMulFromTensor(input, gateTensor, ffnBuf.AsSpan(0, gateCols), gateCols);
 
             if (_cfg.FfnType == FfnType.SwiGLU)
-                VectorMath.SiluInPlace(ffnBuf.AsSpan(0, gateCols));
+                _backend.SiluInPlace(ffnBuf.AsSpan(0, gateCols));
             else
-                VectorMath.Gelu(ffnBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(0, gateCols));
+                _backend.Gelu(ffnBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(0, gateCols));
 
             MatMulFromTensor(input, upTensor, resultBuf.AsSpan(0, upCols), upCols);
-            VectorMath.Mul(ffnBuf.AsSpan(0, gateCols), resultBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(0, gateCols));
+            _backend.Mul(ffnBuf.AsSpan(0, gateCols), resultBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(0, gateCols));
             MatMulFromTensor(ffnBuf.AsSpan(0, gateCols), downTensor, resultBuf.AsSpan(0, hidden), hidden);
         }
         else
@@ -293,7 +323,7 @@ public sealed class InferenceEngine
             var upCols = (int)(upTensor.ElementCount / (ulong)hidden);
 
             MatMulFromTensor(input, upTensor, ffnBuf.AsSpan(0, upCols), upCols);
-            VectorMath.Gelu(ffnBuf.AsSpan(0, upCols), ffnBuf.AsSpan(0, upCols));
+            _backend.Gelu(ffnBuf.AsSpan(0, upCols), ffnBuf.AsSpan(0, upCols));
             MatMulFromTensor(ffnBuf.AsSpan(0, upCols), downTensor, resultBuf.AsSpan(0, hidden), hidden);
         }
     }
@@ -302,20 +332,19 @@ public sealed class InferenceEngine
     {
         var tensors = _tn.ResolveLayer(layer, _cfg);
         var normWeightInfo = isAttnNorm ? tensors.NormWeight : tensors.FfnNormWeight ?? tensors.NormWeight;
-        var normWeight = _model.GetTensor(normWeightInfo.Name);
-        var weights = DequantizeWeights(normWeight);
+        var weights = _model.GetDequantizedWeights(normWeightInfo.Name);
 
         var outSpan = output.AsSpan(0, _cfg.HiddenSize);
 
         if (_cfg.NormType == NormType.RmsNorm)
         {
-            VectorMath.RmsNorm(input, weights, outSpan, _cfg.NormEpsilon);
+            _backend.RmsNorm(input, weights, outSpan, _cfg.NormEpsilon);
         }
         else
         {
             var biasInfo = isAttnNorm ? _tn.TryLayerNormBias(layer) : null;
-            var bias = biasInfo is not null ? DequantizeWeights(_model.GetTensor(biasInfo.Name)) : new float[_cfg.HiddenSize];
-            VectorMath.LayerNorm(input, weights, bias, outSpan, _cfg.NormEpsilon);
+            var bias = biasInfo is not null ? _model.GetDequantizedWeights(biasInfo.Name) : new float[_cfg.HiddenSize];
+            _backend.LayerNorm(input, weights, bias, outSpan, _cfg.NormEpsilon);
         }
     }
 
@@ -325,18 +354,16 @@ public sealed class InferenceEngine
         var postNormInfo = isAttnPostNorm ? tensors.PostAttentionNormWeight : tensors.PostFfnNormWeight;
         if (postNormInfo is null) return;
 
-        var normWeight = _model.GetTensor(postNormInfo.Name);
-        var weights = DequantizeWeights(normWeight);
+        var weights = _model.GetDequantizedWeights(postNormInfo.Name);
         var tmp = hiddenState.ToArray();
-        VectorMath.RmsNorm(tmp, weights, hiddenState, _cfg.NormEpsilon);
+        _backend.RmsNorm(tmp, weights, hiddenState, _cfg.NormEpsilon);
     }
 
     private void ApplyFinalNorm(Span<float> hiddenState)
     {
-        var normTensor = _model.GetTensor("output_norm.weight");
-        var weights = DequantizeWeights(normTensor);
+        var weights = _model.GetDequantizedWeights("output_norm.weight");
         var tmp = hiddenState.ToArray();
-        VectorMath.RmsNorm(tmp, weights, hiddenState, _cfg.NormEpsilon);
+        _backend.RmsNorm(tmp, weights, hiddenState, _cfg.NormEpsilon);
     }
 
     private float[] ComputeLogits(ReadOnlySpan<float> hiddenState, float[] logits)
@@ -358,7 +385,7 @@ public sealed class InferenceEngine
             for (var i = 0; i < Math.Min(vocabSize, logits.Length); i++)
             {
                 var rowSrc = outputTensor.Data.Span.Slice(i * rowBytes, rowBytes);
-                TensorOps.DequantizeToFloat(rowSrc, tmp, outputTensor.ElementType, 1, _cfg.HiddenSize);
+                _backend.DequantizeToFloat(rowSrc, tmp, outputTensor.ElementType, 1, _cfg.HiddenSize);
                 var dot = 0f;
                 for (var j = 0; j < _cfg.HiddenSize; j++)
                     dot += hiddenState[j] * tmp[j];
@@ -379,41 +406,113 @@ public sealed class InferenceEngine
         if (weight.ElementType == GgmlType.F32)
         {
             var weightData = MemoryMarshal.Cast<byte, float>(weight.Data.Span);
-            TensorOps.MatMulF32(input, weightData, output, _cfg.HiddenSize, cols);
+            _backend.MatMulF32(input, weightData, output, _cfg.HiddenSize, cols);
         }
         else
         {
-            TensorOps.MatMul(input, weight.Data.Span, output, weight.ElementType, _cfg.HiddenSize, cols);
+            _backend.MatMul(input, weight.Data.Span, output, weight.ElementType, _cfg.HiddenSize, cols);
         }
     }
 
-    private static float[] DequantizeWeights(Tensor tensor)
-    {
-        var size = tensor.RowCount > 0 ? tensor.RowCount * tensor.ColumnCount : (int)tensor.ElementCount;
-        var result = new float[size];
-        var byteCount = (int)TensorSize.ByteCount(tensor.ElementType, (ulong)size);
-        TensorOps.DequantizeToFloat(tensor.Data.Span[..byteCount], result, tensor.ElementType, tensor.RowCount > 0 ? tensor.RowCount : 1, size / Math.Max(tensor.RowCount, 1));
-        return result;
-    }
-
-    private static int SampleToken(ReadOnlySpan<float> logits, SamplingOptions options)
+    private int SampleToken(ReadOnlySpan<float> logits, SamplingOptions options)
     {
         if (options.Temperature <= 0f)
-            return VectorMath.ArgMax(logits);
+            return _backend.ArgMax(logits);
 
-        var scaled = logits.ToArray();
-        VectorMath.Scale(scaled, 1f / options.Temperature);
-        VectorMath.Softmax(scaled);
+        var length = logits.Length;
+        var scaled = length <= 4096 ? stackalloc float[length] : new float[length];
+        logits.CopyTo(scaled);
+        _backend.Scale(scaled, 1f / options.Temperature);
 
-        var rng = options.Seed >= 0 ? new Random(options.Seed) : Random.Shared;
+        if (options.TopK > 0 && options.TopK < length)
+        {
+            var k = Math.Min(options.TopK, length);
+            FindTopK(scaled, k, out var topIndices, out var topValues, length);
+            _backend.Softmax(topValues);
+            return topIndices[SampleFromProbabilities(topValues, options.Seed)];
+        }
+
+        _backend.Softmax(scaled);
+
+        if (options.TopP < 1f)
+        {
+            var topPIndices = new int[length];
+            var topPValues = new float[length];
+            var nucleusSize = FindNucleus(scaled, options.TopP, topPIndices, topPValues);
+            if (nucleusSize < length)
+            {
+                var nucleusScaled = (Span<float>)topPValues.AsSpan(0, nucleusSize);
+                _backend.Scale(nucleusScaled, 1f / nucleusScaled[0..nucleusSize].ToArray().Sum());
+                return topPIndices[SampleFromProbabilities(nucleusScaled, options.Seed)];
+            }
+        }
+
+        return SampleFromProbabilities(scaled, options.Seed);
+    }
+
+    private static void FindTopK(Span<float> logits, int k, out int[] indices, out Span<float> values, int length)
+    {
+        indices = new int[k];
+        var tempValues = new float[k];
+        var tempIndices = new int[length];
+        for (var i = 0; i < length; i++) tempIndices[i] = i;
+
+        for (var i = 0; i < k; i++)
+        {
+            var maxIdx = i;
+            for (var j = i + 1; j < length; j++)
+            {
+                if (logits[tempIndices[j]] > logits[tempIndices[maxIdx]])
+                    maxIdx = j;
+            }
+            (tempIndices[i], tempIndices[maxIdx]) = (tempIndices[maxIdx], tempIndices[i]);
+            tempValues[i] = logits[tempIndices[i]];
+        }
+
+        for (var i = 0; i < k; i++) indices[i] = tempIndices[i];
+        values = tempValues.AsSpan(0, k);
+    }
+
+    private static int FindNucleus(ReadOnlySpan<float> probabilities, float topP, int[] indices, float[] values)
+    {
+        var length = probabilities.Length;
+        for (var i = 0; i < length; i++) indices[i] = i;
+
+        for (var i = 0; i < length - 1; i++)
+        {
+            var maxIdx = i;
+            for (var j = i + 1; j < length; j++)
+            {
+                if (probabilities[indices[j]] > probabilities[indices[maxIdx]])
+                    maxIdx = j;
+            }
+            if (maxIdx != i)
+                (indices[i], indices[maxIdx]) = (indices[maxIdx], indices[i]);
+        }
+
+        var cumulative = 0f;
+        var count = 0;
+        for (var i = 0; i < length; i++)
+        {
+            values[i] = probabilities[indices[i]];
+            cumulative += values[i];
+            count++;
+            if (cumulative >= topP) break;
+        }
+        return count;
+    }
+
+    private static int SampleFromProbabilities(ReadOnlySpan<float> probabilities, int seed)
+    {
+        var rng = seed >= 0 ? new Random(seed) : Random.Shared;
         var r = rng.NextSingle();
         var cumulative = 0f;
-        for (var i = 0; i < scaled.Length; i++)
+        for (var i = 0; i < probabilities.Length; i++)
         {
-            cumulative += scaled[i];
+            cumulative += probabilities[i];
             if (r <= cumulative)
                 return i;
         }
-        return scaled.Length - 1;
+        return probabilities.Length - 1;
     }
 }

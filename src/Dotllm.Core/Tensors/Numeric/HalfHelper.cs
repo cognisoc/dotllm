@@ -14,18 +14,23 @@ internal static class HalfHelper
         {
             if (mantissa == 0)
                 return sign != 0 ? -0f : 0f;
+
             var normalized = mantissa;
             var shift = 0;
             while ((normalized & 0x400) == 0) { normalized <<= 1; shift++; }
-            var fSign = sign != 0 ? -1f : 1f;
-            return fSign * (normalized & 0x3FF) / 1024f * MathF.Pow(2f, 1 - shift - 15);
+
+            var newExp = 127 - 15 - shift;
+            var newMantissa = (normalized & 0x3FF) << 13;
+            var bits = ((uint)sign << 31) | ((uint)newExp << 23) | (uint)newMantissa;
+            return BitConverter.Int32BitsToSingle((int)bits);
         }
 
         if (exponent == 31)
             return mantissa == 0 ? (sign != 0 ? float.NegativeInfinity : float.PositiveInfinity) : float.NaN;
 
-        var fSign2 = sign != 0 ? -1f : 1f;
-        return fSign2 * (1f + mantissa / 1024f) * MathF.Pow(2f, exponent - 15);
+        var floatExp = exponent - 15 + 127;
+        var floatBits = ((uint)sign << 31) | ((uint)floatExp << 23) | ((uint)mantissa << 13);
+        return BitConverter.Int32BitsToSingle((int)floatBits);
     }
 
     public static float HalfToFloat(ReadOnlySpan<byte> src, int offset)

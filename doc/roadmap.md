@@ -71,7 +71,7 @@ Exit criteria:
 8. **Sampling and streaming:** Integrate the sampling engine and expose `IAsyncEnumerable<T>` token streaming.
 9. **Tokenizer decoding:** Implement BPE decode from GGUF metadata arrays (`tokenizer.ggml.tokens`, `tokenizer.ggml.scores`, `tokenizer.ggml.merges`). Support custom BPE with extended special tokens (LFM2).
 
-## Phase 2: Developer-Facing API (IN PROGRESS)
+## Phase 2: Developer-Facing API (COMPLETE)
 
 Goals:
 
@@ -99,7 +99,7 @@ Exit criteria:
 4. **Model capability inspection:** `ModelCapabilities` class exposes architecture, template, attention type, MoE status, sliding window, softcapping from `TransformerConfig`.
 5. **High-level ChatSession:** String-in/string-out generation wrapper with conversation history and BOS token handling.
 
-## Phase 3: Performance and Reliability
+## Phase 3: Performance and Reliability (IN PROGRESS)
 
 Goals:
 
@@ -109,6 +109,26 @@ Goals:
 - validate behavior across Windows, Linux, and macOS
 - optimize GQA/MQA KV cache sharing
 - optimize LFM2 convolution blocks (fixed-size recurrence state, no growing cache)
+
+### Phase 3 Milestones
+
+1. **SIMD vectorization of hot-path math kernels:** Add `System.Numerics.Vector` acceleration to `RmsNorm`, `LayerNorm`, `Softmax` (partial — max-reduction + normalize), `Add`, `Scale`, `Mul` in `VectorMath`. Silu/Gelu remain scalar due to transcendental functions.
+2. **Weight dequantization caching:** `LoadedModel.GetDequantizedWeights()` caches norm and output projection weights at first use, eliminating per-token allocation and dequantization overhead (previously ~64+ allocations per token for a 32-layer model).
+3. **TopK/TopP sampling:** `SampleToken` now implements TopK filtering before softmax and TopP (nucleus) filtering after softmax, matching the `SamplingOptions` parameters that were previously defined but unused.
+4. **Buffer pooling across Generate calls:** `KvCache` and `InferenceBuffers` are now per-engine fields (not per-call allocations), reset/reused across calls. `KvCache` no longer implements `IDisposable` since it only holds managed arrays.
+5. **RoPE frequency precomputation:** `InferenceEngine` precomputes the RoPE frequency table at construction time, eliminating repeated `MathF.Pow` calls per head per layer per token.
+6. **HalfHelper bit-manipulation FP16 conversion:** Replace `MathF.Pow`-based half-to-float conversion with direct IEEE 754 bit manipulation, eliminating transcendental function calls in dequantize hot paths.
+7. **Sampling allocation elimination:** Replace `logits.ToArray()` with `stackalloc` for typical vocab sizes and in-place `Scale`, avoiding per-token heap allocation.
+8. **IComputeBackend completeness:** Extended `IComputeBackend` interface with all tensor operations used by `InferenceEngine` (`Add`, `Scale`, `Mul`, `SiluInPlace`, `Softcap`, `Conv1D`, `DequantizeToFloat`, `GeluScalar`), enabling future GPU backends to implement the full compute contract.
+9. **BenchmarkDotNet suite:** Added `VectorMathBenchmarks`, `DequantizeBenchmarks`, and `SamplingBenchmarks` measuring hot-path operations at representative sizes (512, 2048, 4096 elements; 32K and 128K vocab).
+
+### Remaining Phase 3 Work
+
+- quantized MatMul dequantize-through-multiply fusion (batched row dequantization)
+- MatMulF32 column-major cache optimization / tiling
+- GQA/MQA KV cache sharing (multiple query heads share the same KV slots)
+- LFM2 conv block recurrence state optimization
+- cross-platform validation (Windows, Linux)
 
 Exit criteria:
 

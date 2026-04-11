@@ -1,6 +1,6 @@
 namespace Dotllm.Inference;
 
-internal sealed class KvCache : IDisposable
+internal sealed class KvCache
 {
     private readonly float[] _keyBuffer;
     private readonly float[] _valueBuffer;
@@ -41,6 +41,4 @@ internal sealed class KvCache : IDisposable
     public void Advance(int count = 1) => _currentPos += count;
 
     public void Reset() => _currentPos = 0;
-
-    public void Dispose() { }
 }

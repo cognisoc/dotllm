@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Dotllm.Vulkan</RootNamespace>
+    <AssemblyName>Dotllm.Vulkan</AssemblyName>
+    <PackageId>Dotllm.Vulkan</PackageId>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dotllm.Core\Dotllm.Core.csproj" />
+  </ItemGroup>
+
+</Project>

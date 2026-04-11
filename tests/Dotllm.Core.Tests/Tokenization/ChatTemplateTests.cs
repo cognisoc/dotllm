@@ -62,10 +62,10 @@ public class ChatTemplateTests
             new ChatMessageEntry("user", "Summarize this."),
         ]);
 
-        Assert.Contains("|>user", result);
+        Assert.Contains("<|user|>", result);
         Assert.Contains("Summarize this.", result);
         Assert.Contains("<|end|>", result);
-        Assert.Contains("assistant", result);
+        Assert.Contains("<|assistant|>", result);
     }
 
     [Fact]

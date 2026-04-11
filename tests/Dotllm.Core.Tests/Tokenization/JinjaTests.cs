@@ -318,7 +318,7 @@ public class JinjaTests
         var template = "{% for message in messages %}<|{{ message.role }}|>\n{{ message.content }}<|end|>\n{% endfor %}<s>\n\n";
         var result = JinjaTemplate.Render(template, ctx);
 
-        Assert.Contains("|>user", result);
+        Assert.Contains("<|user|>", result);
     }
 
     [Fact]

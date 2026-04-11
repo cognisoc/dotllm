@@ -196,6 +196,30 @@ internal static class TensorOps
         }
     }
 
+    public static void ApplyRoPE(Span<float> query, Span<float> key, int headDim, int position, ReadOnlySpan<float> freqTable)
+    {
+        var halfDim = freqTable.Length;
+
+        for (var i = 0; i < halfDim; i++)
+        {
+            var angle = position * freqTable[i];
+            var cosVal = MathF.Cos(angle);
+            var sinVal = MathF.Sin(angle);
+
+            var qIdx = i;
+            var qHalfIdx = i + halfDim;
+            var q0 = query[qIdx];
+            var q1 = query[qHalfIdx];
+            query[qIdx] = q0 * cosVal - q1 * sinVal;
+            query[qHalfIdx] = q0 * sinVal + q1 * cosVal;
+
+            var k0 = key[qIdx];
+            var k1 = key[qHalfIdx];
+            key[qIdx] = k0 * cosVal - k1 * sinVal;
+            key[qHalfIdx] = k0 * sinVal + k1 * cosVal;
+        }
+    }
+
     public static void Conv1D(ReadOnlySpan<float> input, ReadOnlySpan<float> weights, Span<float> output, int kernelSize, int inputDim)
     {
         for (var i = 0; i < inputDim; i++)

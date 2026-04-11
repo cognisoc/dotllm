@@ -1,0 +1,49 @@
+// RmsNorm compute shader
+// Input: input[hiddenSize], weights[hiddenSize], uniform: epsilon, hiddenSize
+// Output: output[hiddenSize]
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(binding = 0) readonly buffer InputBuffer { float input[]; };
+layout(binding = 1) readonly buffer WeightBuffer { float weights[]; };
+layout(binding = 2) writeonly buffer OutputBuffer { float output[]; };
+
+layout(push_constant) uniform PushConstants {
+    float epsilon;
+    uint hiddenSize;
+};
+
+shared float s_shared[256];
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    uint local_idx = gl_LocalInvocationID.x;
+    uint group_size = gl_WorkGroupSize.x;
+
+    // Parallel reduction for sum of squares
+    float thread_ss = 0.0;
+    for (uint i = idx; i < hiddenSize; i += group_size * gl_NumWorkGroups_x)
+    {
+        thread_ss += input[i] * input[i];
+    }
+
+    s_shared[local_idx] = thread_ss;
+    barrier();
+
+    for (uint stride = group_size / 2; stride > 0; stride >>= 1)
+    {
+        if (local_idx < stride)
+            s_shared[local_idx] += s_shared[local_idx + stride];
+        barrier();
+    }
+
+    float inv_norm = 1.0 / sqrt(s_shared[0] / float(hiddenSize) + epsilon);
+
+    for (uint i = idx; i < hiddenSize; i += group_size * gl_NumWorkGroups_x)
+    {
+        output[i] = weights[i] * (input[i] * inv_norm);
+    }
+}

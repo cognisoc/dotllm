@@ -1,17 +1,31 @@
 using System.Runtime.InteropServices;
 using Dotllm.Loading;
-using Dotllm.Tensors;
 using Dotllm.Tensors.Numeric;
+using Dotllm.Inference;
 
-namespace Dotllm.Inference;
+namespace Dotllm.Vulkan;
 
-internal sealed class CpuBackend : IComputeBackend
+public sealed class VulkanBackend : IComputeBackend
 {
-    public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols) =>
-        TensorOps.MatMul(a, b, result, bType, aCols, bCols);
+    private readonly VulkanBackendOptions _options;
+    private bool _disposed;
 
-    public void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols) =>
-        TensorOps.MatMulF32(a, b, result, aCols, bCols);
+    public VulkanBackend(VulkanBackendOptions? options = null)
+    {
+        _options = options ?? new VulkanBackendOptions();
+    }
+
+    public bool IsAvailable => VulkanRuntime.IsAvailable;
+
+    public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols)
+    {
+        FallbackMatMul(a, b, result, bType, aCols, bCols);
+    }
+
+    public void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols)
+    {
+        FallbackMatMulF32(a, b, result, aCols, bCols);
+    }
 
     public void RmsNorm(ReadOnlySpan<float> input, ReadOnlySpan<float> weights, Span<float> output, float epsilon) =>
         VectorMath.RmsNorm(input, weights, output, epsilon);
@@ -20,10 +34,10 @@ internal sealed class CpuBackend : IComputeBackend
         VectorMath.LayerNorm(input, weights, bias, output, epsilon);
 
     public void ApplyRoPE(Span<float> query, Span<float> key, int headDim, int position, float freqBase, int rotaryDim) =>
-        TensorOps.ApplyRoPE(query, key, headDim, position, freqBase, rotaryDim);
+        Tensors.TensorOps.ApplyRoPE(query, key, headDim, position, freqBase, rotaryDim);
 
     public void ApplyRoPE(Span<float> query, Span<float> key, int headDim, int position, ReadOnlySpan<float> freqTable) =>
-        TensorOps.ApplyRoPE(query, key, headDim, position, freqTable);
+        Tensors.TensorOps.ApplyRoPE(query, key, headDim, position, freqTable);
 
     public void Softmax(Span<float> input, float? softcap = null) =>
         VectorMath.Softmax(input, softcap);
@@ -59,11 +73,23 @@ internal sealed class CpuBackend : IComputeBackend
         VectorMath.Softcap(input, cap);
 
     public void Conv1D(ReadOnlySpan<float> input, ReadOnlySpan<float> weights, Span<float> output, int kernelSize, int inputDim) =>
-        TensorOps.Conv1D(input, weights, output, kernelSize, inputDim);
+        Tensors.TensorOps.Conv1D(input, weights, output, kernelSize, inputDim);
 
     public void DequantizeToFloat(ReadOnlySpan<byte> src, Span<float> dst, GgmlType type, int numRows, int rowElements) =>
-        TensorOps.DequantizeToFloat(src, dst, type, numRows, rowElements);
+        Tensors.TensorOps.DequantizeToFloat(src, dst, type, numRows, rowElements);
 
     public int ArgMax(ReadOnlySpan<float> input) =>
         VectorMath.ArgMax(input);
+
+    private static void FallbackMatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols) =>
+        Tensors.TensorOps.MatMul(a, b, result, bType, aCols, bCols);
+
+    private static void FallbackMatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols) =>
+        Tensors.TensorOps.MatMulF32(a, b, result, aCols, bCols);
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+    }
 }
