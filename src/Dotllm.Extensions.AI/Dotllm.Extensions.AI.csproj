@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dotllm.Core\Dotllm.Core.csproj" />
+    <ProjectReference Include="..\Dotllm.Vulkan\Dotllm.Vulkan.csproj" />
+    <ProjectReference Include="..\Dotllm.Metal\Dotllm.Metal.csproj" />
   </ItemGroup>
 
 </Project>

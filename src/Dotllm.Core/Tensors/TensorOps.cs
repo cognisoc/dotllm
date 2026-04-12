@@ -17,11 +17,29 @@ internal static class TensorOps
             case GgmlType.F16:
                 DequantizeF16.Dequantize(src, dst, numRows * rowElements);
                 break;
+            case GgmlType.BF16:
+                DequantizeBF16.Dequantize(src, dst, numRows * rowElements);
+                break;
             case GgmlType.Q4_0:
                 DequantizeQ4_0.Dequantize(src, dst, numRows, rowElements);
                 break;
             case GgmlType.Q8_0:
                 DequantizeQ8_0.Dequantize(src, dst, numRows, rowElements);
+                break;
+            case GgmlType.Q2_K:
+                DequantizeK.DequantizeQ2_K(src, dst, numRows, rowElements);
+                break;
+            case GgmlType.Q3_K:
+                DequantizeK.DequantizeQ3_K(src, dst, numRows, rowElements);
+                break;
+            case GgmlType.Q4_K:
+                DequantizeK.DequantizeQ4_K(src, dst, numRows, rowElements);
+                break;
+            case GgmlType.Q5_K:
+                DequantizeK.DequantizeQ5_K(src, dst, numRows, rowElements);
+                break;
+            case GgmlType.Q6_K:
+                DequantizeK.DequantizeQ6_K(src, dst, numRows, rowElements);
                 break;
             default:
                 DequantizeGeneric(src, dst, type, numRows, rowElements);

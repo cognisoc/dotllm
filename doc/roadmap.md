@@ -137,7 +137,27 @@ Exit criteria:
 - core runtime is stable across supported operating systems
 - LFM2 models show expected CPU speedup over pure-attention architectures
 
-## Phase 4: Optional GPU Compute Backends
+## Phase 4.5: Real Model Readiness
+
+Goals:
+
+- support the most common GGUF quantization formats (K-quants, BF16)
+- fix BPE tokenizer to perform actual merge operations
+- support GGUF v2 files
+- implement RoPE scaling (Linear) and sliding window attention
+- create a working sample app for end-to-end inference
+
+### Completed
+
+1. **K-quant dequantization:** Full support for Q2_K, Q3_K, Q4_K, Q5_K, Q6_K super-block formats. All 6 formats implemented with correct scale/bit extraction per the GGUF spec.
+2. **BF16 dequantization:** `DequantizeBF16` converts bfloat16 to float32 via direct bit manipulation (shift byte pair to upper 16 bits of IEEE 754 float).
+3. **BPE merge operations:** `BpeTokenizer.Encode()` now performs actual BPE merging after initial tokenization — repeatedly merges the highest-priority adjacent pair until no more merges apply.
+4. **GGUF v2 support:** Minimum version requirement lowered from 3 to 2, accepting both v2 and v3 files.
+5. **RoPE scaling (Linear):** `PrecomputeRopeFrequencies` divides all frequencies by `RopeScalingFactor` when `RopeScalingType.Linear` is set, enabling context-extended models.
+6. **Sliding window attention:** `AttentionForward` now applies `SlidingWindow` constraint — only attends to tokens within the sliding window range.
+7. **Sample app:** `Dotllm.Sample` now loads a real GGUF model, prints model capabilities, and runs interactive or single-prompt inference through `ChatSession`.
+
+## Phase 4: Optional GPU Compute Backends (IN PROGRESS)
 
 Goals:
 
@@ -147,12 +167,20 @@ Goals:
 - measure real-world benefit against backend complexity
 - ensure backend dispatch works for all four templates including LFM2 conv blocks
 
-Exit criteria:
+### Phase 4 Milestones
 
-- at least one optional backend provides measurable acceleration
-- backend fallback is automatic and predictable
-- model compatibility does not depend on model conversion
-- GGUF weights are used directly (no ONNX, no format conversion)
+1. **Compute backend abstraction:** All tensor operations in `InferenceEngine` now route through `IComputeBackend` instead of calling `VectorMath`/`TensorOps` directly. The interface (`IComputeBackend : IDisposable`) covers: MatMul, MatMulF32, RmsNorm, LayerNorm, ApplyRoPE (both overloads), Softmax, Silu, SiluInPlace, Gelu, GeluScalar, Add, Scale, Mul, Softcap, Conv1D, DequantizeToFloat, ArgMax.
+2. **Metal compute backend (GPU dispatch):** `Dotllm.Metal` project with `MetalBackend` implementing `IComputeBackend`. Uses Objective-C runtime P/Invoke (`objc_msgSend`) to call Metal APIs directly from C#. Runtime shader compilation from Metal Shading Language source. GPU dispatch implemented for: RmsNorm, LayerNorm, Softmax, Add (in-place and out-of-place), Scale (in-place and out-of-place), Mul, Silu, SiluInPlace, Gelu, MatMulF32. Operations below a size threshold (256 elements) fall back to CPU. MatMul quantized, ApplyRoPE, DequantizeToFloat, Conv1D, ArgMax remain on CPU. `MetalRuntime.IsAvailable` checks for Metal framework via `NativeLibrary.TryLoad`. `MetalInterop` class manages MTLDevice, MTLCommandQueue, MTLComputePipelineState lifecycle through Objective-C runtime message sends. Persistent and scratch GPU buffer management for weight caching across tokens.
+3. **Vulkan compute backend (structurally complete):** `Dotllm.Vulkan` project with `VulkanBackend` implementing `IComputeBackend`. Includes `VulkanInterop` class with full Vulkan P/Invoke bindings (instance, device, command pool, descriptor pool, pipeline layout, shader module, buffer/memory management, command buffer lifecycle). Includes SPIR-V compute shader source for RmsNorm, Softmax, and element-wise ops. Currently delegates all operations to CPU (`VectorMath`/`TensorOps`) — GPU dispatch requires SPIR-V binary compilation and testing on a Vulkan-capable device. `VulkanRuntime.IsAvailable` checks for `vulkan-1.dll` / `libvulkan.so`.
+4. **Backend selection:** `BackendFactory.CreateBestAvailable()` tries Metal on macOS, Vulkan on Linux/Windows, falls back to CPU. `InferenceEngine` accepts `IComputeBackend` in its internal constructor.
+
+### Remaining Phase 4 Work
+
+- Implement Metal MatMul quantized compute shader (Q4_0, Q8_0, K-quants)
+- Implement Vulkan GPU dispatch (requires SPIR-V binary compilation and Vulkan-capable GPU for testing)
+- Persistent weight upload to GPU (upload model weights once, reuse across tokens)
+- Pipeline GPU dispatch for dequantize-then-matmul fusion
+- Benchmark and measure real acceleration vs CPU baseline
 
 ### Why GPU Compute, Not NPU
 

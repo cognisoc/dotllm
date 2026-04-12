@@ -16,8 +16,8 @@ internal sealed class GgufReader
             throw new InvalidDataException("Invalid GGUF magic. Expected 'GGUF'.");
 
         var version = reader.ReadUInt32LittleEndian();
-        if (version < GgufConstants.SupportedVersion)
-            throw new InvalidDataException($"Unsupported GGUF version: {version}. Minimum supported: {GgufConstants.SupportedVersion}.");
+        if (version < GgufConstants.MinimumVersion)
+            throw new InvalidDataException($"Unsupported GGUF version: {version}. Minimum supported: {GgufConstants.MinimumVersion}.");
 
         var tensorCount = reader.ReadUInt64LittleEndian();
         var metadataKvCount = reader.ReadUInt64LittleEndian();

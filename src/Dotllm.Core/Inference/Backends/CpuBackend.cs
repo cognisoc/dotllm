@@ -7,6 +7,7 @@ namespace Dotllm.Inference;
 
 internal sealed class CpuBackend : IComputeBackend
 {
+    public void Dispose() { }
     public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols) =>
         TensorOps.MatMul(a, b, result, bType, aCols, bCols);
 

@@ -1,6 +1,6 @@
 namespace Dotllm.Inference;
 
-internal interface IComputeBackend
+public interface IComputeBackend : IDisposable
 {
     void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, Loading.GgmlType bType, int aCols, int bCols);
     void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols);

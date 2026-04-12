@@ -8,6 +8,7 @@ internal static class TensorSize
     {
         GgmlType.F32 => elementCount * 4,
         GgmlType.F16 => elementCount * 2,
+        GgmlType.BF16 => elementCount * 2,
         GgmlType.Q4_0 => elementCount / 32 * 18,
         GgmlType.Q4_1 => elementCount / 32 * 20,
         GgmlType.Q5_0 => elementCount / 32 * 22,
@@ -19,7 +20,6 @@ internal static class TensorSize
         GgmlType.Q4_K => elementCount / 256 * 144,
         GgmlType.Q5_K => elementCount / 256 * 176,
         GgmlType.Q6_K => elementCount / 256 * 210,
-        GgmlType.BF16 => elementCount * 2,
         _ => throw new NotSupportedException($"Unsupported GGML type: {type}"),
     };
 }

@@ -420,10 +420,7 @@ internal sealed class JinjaEvaluator
         ["boolean"] = (val, _) => val is bool,
         ["true"] = (val, _) => IsTruthy(val),
         ["false"] = (val, _) => !IsTruthy(val),
-        ["equalto"] = (val, globals) =>
-        {
-            return true;
-        },
+        ["equalto"] = (val, globals) => true,
     };
 
     private static string ToJson(object? val, int? indent = null)

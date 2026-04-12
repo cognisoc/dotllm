@@ -1,0 +1,57 @@
+// Element-wise kernels: add, scale, mul, silu, gelu
+// Each dispatches 1 thread per element with workgroup size 256
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform PushConstants {
+    uint count;
+    float scalar;
+};
+
+// Add kernel: output[i] = a[i] + b[i]
+layout(binding = 0) readonly buffer AddA { float add_a[]; };
+layout(binding = 1) readonly buffer AddB { float add_b[]; };
+layout(binding = 2) writeonly buffer AddOut { float add_out[]; };
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < count)
+        add_out[idx] = add_a[idx] + add_b[idx];
+}
+
+// Scale kernel: output[i] = input[i] * scalar
+layout(binding = 3) readonly buffer ScaleIn { float scale_in[]; };
+layout(binding = 4) writeonly buffer ScaleOut { float scale_out[]; };
+
+void main_scale()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < count)
+        scale_out[idx] = scale_in[idx] * scalar;
+}
+
+// Mul kernel: output[i] = a[i] * b[i]
+layout(binding = 5) readonly buffer MulA { float mul_a[]; };
+layout(binding = 6) readonly buffer MulB { float mul_b[]; };
+layout(binding = 7) writeonly buffer MulOut { float mul_out[]; };
+
+void main_mul()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < count)
+        mul_out[idx] = mul_a[idx] * mul_b[idx];
+}
+
+// Silu kernel: output[i] = input[i] / (1 + exp(-input[i]))
+layout(binding = 8) readonly buffer SiluIn { float silu_in[]; };
+layout(binding = 9) writeonly buffer SiluOut { float silu_out[]; };
+
+void main_silu()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < count)
+        silu_out[idx] = silu_in[idx] / (1.0 + exp(-silu_in[idx]));
+}

@@ -39,7 +39,14 @@ public sealed class InferenceEngine
         var halfDim = actualRotaryDim / 2;
         var freqs = new float[halfDim];
         for (var i = 0; i < halfDim; i++)
-            freqs[i] = 1f / MathF.Pow(cfg.RopeFreqBase, 2f * i / actualRotaryDim);
+        {
+            var freq = 1f / MathF.Pow(cfg.RopeFreqBase, 2f * i / actualRotaryDim);
+
+            if (cfg.RopeScalingType == RopeScalingType.Linear && cfg.RopeScalingFactor > 1f)
+                freq /= cfg.RopeScalingFactor;
+
+            freqs[i] = freq;
+        }
         return freqs;
     }
 
@@ -60,6 +67,8 @@ public sealed class InferenceEngine
         var generated = 0;
         var stopSequences = options.StopSequences;
         var generatedText = new System.Text.StringBuilder();
+        var recentTokens = new List<int>(promptTokens);
+        var repeatWindowSize = options.Sampling.RepeatPenaltyWindowSize;
 
         while (generated < options.MaxTokens && !cancellationToken.IsCancellationRequested)
         {
@@ -68,8 +77,11 @@ public sealed class InferenceEngine
             if (_cfg.FinalLogitSoftcap.HasValue)
                 _backend.Softcap(logits, _cfg.FinalLogitSoftcap.Value);
 
-            var nextToken = SampleToken(logits, options.Sampling);
+            var nextToken = SampleToken(logits, options.Sampling, recentTokens);
             _kvCache.Advance();
+            recentTokens.Add(nextToken);
+            if (recentTokens.Count > repeatWindowSize + 1)
+                recentTokens.RemoveRange(0, recentTokens.Count - repeatWindowSize - 1);
             yield return nextToken;
 
             if (nextToken == _cfg.EosTokenId)
@@ -256,6 +268,7 @@ public sealed class InferenceEngine
         }
 
         var seqLen = position + 1;
+        var attnStart = _cfg.SlidingWindow > 0 ? Math.Max(0, seqLen - _cfg.SlidingWindow) : 0;
         var result = buf.AttnResultBuf.AsSpan(0, qDim);
         var scoreBuf = buf.AttnOutBuf.AsSpan(0, hidden);
 
@@ -266,21 +279,22 @@ public sealed class InferenceEngine
             var keys = kvCache.GetKeys(layer);
             var values = kvCache.GetValues(layer);
 
-            for (var s = 0; s < seqLen; s++)
+            for (var s = attnStart; s < seqLen; s++)
             {
                 var dot = 0f;
                 for (var d = 0; d < headDim; d++)
                     dot += qSlice[d] * keys[s * kvDim + kvGroup * headDim + d];
-                scoreBuf[s] = dot / MathF.Sqrt(headDim);
+                scoreBuf[s - attnStart] = dot / MathF.Sqrt(headDim);
             }
 
-            _backend.Softmax(scoreBuf[..seqLen], _cfg.AttnLogitSoftcap);
+            var attnLen = seqLen - attnStart;
+            _backend.Softmax(scoreBuf[..attnLen], _cfg.AttnLogitSoftcap);
 
             for (var d = 0; d < headDim; d++)
             {
                 var val = 0f;
-                for (var s = 0; s < seqLen; s++)
-                    val += scoreBuf[s] * values[s * kvDim + kvGroup * headDim + d];
+                for (var s = 0; s < attnLen; s++)
+                    val += scoreBuf[s] * values[(attnStart + s) * kvDim + kvGroup * headDim + d];
                 result[h * headDim + d] = val;
             }
         }
@@ -414,7 +428,7 @@ public sealed class InferenceEngine
         }
     }
 
-    private int SampleToken(ReadOnlySpan<float> logits, SamplingOptions options)
+    private int SampleToken(ReadOnlySpan<float> logits, SamplingOptions options, List<int> recentTokens)
     {
         if (options.Temperature <= 0f)
             return _backend.ArgMax(logits);
@@ -422,6 +436,23 @@ public sealed class InferenceEngine
         var length = logits.Length;
         var scaled = length <= 4096 ? stackalloc float[length] : new float[length];
         logits.CopyTo(scaled);
+
+        if (options.RepeatPenalty != 1f && recentTokens.Count > 0 && options.RepeatPenaltyWindowSize > 0)
+        {
+            var windowStart = Math.Max(0, recentTokens.Count - options.RepeatPenaltyWindowSize);
+            for (var i = windowStart; i < recentTokens.Count; i++)
+            {
+                var tokenId = recentTokens[i];
+                if (tokenId >= 0 && tokenId < length)
+                {
+                    if (scaled[tokenId] > 0)
+                        scaled[tokenId] /= options.RepeatPenalty;
+                    else
+                        scaled[tokenId] *= options.RepeatPenalty;
+                }
+            }
+        }
+
         _backend.Scale(scaled, 1f / options.Temperature);
 
         if (options.TopK > 0 && options.TopK < length)

@@ -82,17 +82,81 @@ public sealed class BpeTokenizer
             {
                 result.Add(bestId);
                 i += bestLen;
+                continue;
             }
-            else
+
+            var ch = text[i];
+            var chStr = ch.ToString();
+            if (_tokenToId.TryGetValue(chStr, out var charId))
             {
-                var ch = text[i];
-                var encoded = EncodeSingleChar(ch);
-                result.AddRange(encoded);
+                result.Add(charId);
                 i++;
+                continue;
             }
+
+            var bytes = Encoding.UTF8.GetBytes(chStr);
+            foreach (var b in bytes)
+            {
+                var byteToken = $"<0x{b:X2}>";
+                if (_tokenToId.TryGetValue(byteToken, out var byteId))
+                    result.Add(byteId);
+                else
+                    result.Add(UnknownTokenId());
+            }
+
+            i++;
         }
 
+        if (_mergeRanks.Count > 0)
+            result = ApplyMerges(result);
+
         return result.ToArray();
+    }
+
+    private List<int> ApplyMerges(List<int> tokens)
+    {
+        if (tokens.Count <= 1)
+            return tokens;
+
+        var symbols = new List<string>(tokens.Count);
+        foreach (var id in tokens)
+            symbols.Add(_idToToken.TryGetValue(id, out var t) ? t : UnknownTokenId().ToString(CultureInfo.InvariantCulture));
+
+        while (symbols.Count > 1)
+        {
+            var bestRank = int.MaxValue;
+            var bestIdx = -1;
+
+            for (var j = 0; j < symbols.Count - 1; j++)
+            {
+                if (_mergeRanks.TryGetValue((symbols[j], symbols[j + 1]), out var rank))
+                {
+                    if (rank < bestRank)
+                    {
+                        bestRank = rank;
+                        bestIdx = j;
+                    }
+                }
+            }
+
+            if (bestIdx < 0)
+                break;
+
+            var merged = symbols[bestIdx] + symbols[bestIdx + 1];
+            symbols.RemoveAt(bestIdx + 1);
+            symbols[bestIdx] = merged;
+        }
+
+        var result = new List<int>(symbols.Count);
+        foreach (var sym in symbols)
+        {
+            if (_tokenToId.TryGetValue(sym, out var id))
+                result.Add(id);
+            else
+                result.Add(UnknownTokenId());
+        }
+
+        return result;
     }
 
     public string Decode(IEnumerable<int> ids)
@@ -112,29 +176,6 @@ public sealed class BpeTokenizer
 
     public bool TryGetTokenId(string token, out int id) =>
         _tokenToId.TryGetValue(token, out id);
-
-    private List<int> EncodeSingleChar(char ch)
-    {
-        var result = new List<int>();
-
-        if (_tokenToId.TryGetValue(ch.ToString(), out var id))
-        {
-            result.Add(id);
-            return result;
-        }
-
-        var bytes = Encoding.UTF8.GetBytes(ch.ToString());
-        foreach (var b in bytes)
-        {
-            var byteToken = $"<0x{b:X2}>";
-            if (_tokenToId.TryGetValue(byteToken, out var byteId))
-                result.Add(byteId);
-            else
-                result.Add(UnknownTokenId());
-        }
-
-        return result;
-    }
 
     private int UnknownTokenId() =>
         _tokenToId.TryGetValue("<unk>", out var id) ? id : 0;

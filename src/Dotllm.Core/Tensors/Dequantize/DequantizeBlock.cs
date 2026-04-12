@@ -66,6 +66,20 @@ internal static class DequantizeF16
     }
 }
 
+internal static class DequantizeBF16
+{
+    public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var b0 = src[i * 2];
+            var b1 = src[i * 2 + 1];
+            var bits = (uint)((b1 << 24) | (b0 << 16));
+            dst[i] = BitConverter.Int32BitsToSingle((int)bits);
+        }
+    }
+}
+
 internal static class DequantizeF32
 {
     public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int count)

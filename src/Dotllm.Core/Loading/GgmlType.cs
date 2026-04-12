@@ -1,6 +1,6 @@
 namespace Dotllm.Loading;
 
-internal enum GgmlType : uint
+public enum GgmlType : uint
 {
     F32 = 0,
     F16 = 1,
