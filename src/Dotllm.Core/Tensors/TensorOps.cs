@@ -1,3 +1,5 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Dotllm.Loading;
 using Dotllm.Tensors.Dequantize;
@@ -50,6 +52,13 @@ internal static class TensorOps
     public static void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols)
     {
         var aRows = result.Length / bCols;
+
+        if (aRows == 1 && (bType == GgmlType.Q4_0 || bType == GgmlType.Q8_0))
+        {
+            MatMulFusedQuantized(a, b, result, bType, aCols, bCols);
+            return;
+        }
+
         float[]? rented = null;
         Span<float> tmp = aCols <= 4096 ? stackalloc float[aCols] : (rented = System.Buffers.ArrayPool<float>.Shared.Rent(aCols));
 
@@ -61,9 +70,7 @@ internal static class TensorOps
                 for (var c = 0; c < bCols; c++)
                 {
                     DequantizeRow(b, tmp, bType, c, aCols);
-                    var dot = 0f;
-                    for (var k = 0; k < aCols; k++)
-                        dot += aRow[k] * tmp[k];
+                    var dot = DotProduct(aRow, tmp);
                     result[r * bCols + c] = dot;
                 }
             }
@@ -75,20 +82,198 @@ internal static class TensorOps
         }
     }
 
+    private static void MatMulFusedQuantized(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols)
+    {
+        switch (bType)
+        {
+            case GgmlType.Q4_0:
+                MatMulFusedQ4_0(a, b, result, aCols, bCols);
+                break;
+            case GgmlType.Q8_0:
+                MatMulFusedQ8_0(a, b, result, aCols, bCols);
+                break;
+        }
+    }
+
+    private static void MatMulFusedQ4_0(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols)
+    {
+        const int blockSize = 32;
+        const int halfBlock = blockSize / 2;
+        const int blockBytes = 2 + halfBlock;
+        var numBlocks = aCols / blockSize;
+        var vecSize = Vector<float>.Count;
+
+        Span<float> fused = aCols <= 4096 ? stackalloc float[aCols] : new float[aCols];
+
+        for (var c = 0; c < bCols; c++)
+        {
+            var rowOffset = (long)c * numBlocks * blockBytes;
+            var fusedIdx = 0;
+
+            for (var blk = 0; blk < numBlocks; blk++)
+            {
+                var off = (int)(rowOffset + blk * blockBytes);
+                var d = HalfHelper.HalfToFloat(b, off);
+
+                for (var i = 0; i < halfBlock; i++)
+                {
+                    var qs = b[off + 2 + i];
+                    var v0 = ((qs & 0x0F) - 8f) * d;
+                    var v1 = (((qs >> 4) & 0x0F) - 8f) * d;
+
+                    fused[fusedIdx] = a[fusedIdx] * v0;
+                    fused[fusedIdx + 1] = a[fusedIdx + 1] * v1;
+                    fusedIdx += 2;
+                }
+            }
+
+            var accVec = Vector<float>.Zero;
+            var k = 0;
+            for (; k <= aCols - vecSize; k += vecSize)
+            {
+                var v = new Vector<float>(fused.Slice(k, vecSize));
+                accVec += v;
+            }
+
+            var dot = Vector.Dot(accVec, Vector<float>.One);
+            for (; k < aCols; k++)
+                dot += fused[k];
+
+            result[c] = dot;
+        }
+    }
+
+    private static void MatMulFusedQ8_0(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols)
+    {
+        const int blockSize = 32;
+        const int blockBytes = 2 + blockSize;
+        var numBlocks = aCols / blockSize;
+        var vecSize = Vector<float>.Count;
+
+        Span<float> fused = aCols <= 4096 ? stackalloc float[aCols] : new float[aCols];
+
+        for (var c = 0; c < bCols; c++)
+        {
+            var rowOffset = (long)c * numBlocks * blockBytes;
+            var aIdx = 0;
+
+            for (var blk = 0; blk < numBlocks; blk++)
+            {
+                var off = (int)(rowOffset + blk * blockBytes);
+                var d = HalfHelper.HalfToFloat(b, off);
+
+                for (var i = 0; i < blockSize; i++)
+                {
+                    fused[aIdx] = a[aIdx] * ((sbyte)b[off + 2 + i] * d);
+                    aIdx++;
+                }
+            }
+
+            var accVec = Vector<float>.Zero;
+            var k = 0;
+            for (; k <= aCols - vecSize; k += vecSize)
+            {
+                var v = new Vector<float>(fused.Slice(k, vecSize));
+                accVec += v;
+            }
+
+            var dot = Vector.Dot(accVec, Vector<float>.One);
+            for (; k < aCols; k++)
+                dot += fused[k];
+
+            result[c] = dot;
+        }
+    }
+
     public static void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols)
     {
         var aRows = result.Length / bCols;
+        var vecSize = Vector<float>.Count;
+
+        if (aRows == 1)
+        {
+            MatMulF32SingleRow(a, b, result, aCols, bCols);
+            return;
+        }
+
         for (var r = 0; r < aRows; r++)
         {
             var aRow = a.Slice(r * aCols, aCols);
+
             for (var c = 0; c < bCols; c++)
             {
                 var dot = 0f;
-                for (var k = 0; k < aCols; k++)
+                var accVec = Vector<float>.Zero;
+                var k = 0;
+
+                for (; k <= aCols - vecSize; k += vecSize)
+                {
+                    var va = new Vector<float>(aRow.Slice(k, vecSize));
+                    var vb = new Vector<float>(b.Slice(k * bCols + c, vecSize));
+                    accVec += va * vb;
+                }
+
+                dot = Vector.Dot(accVec, Vector<float>.One);
+
+                for (; k < aCols; k++)
                     dot += aRow[k] * b[k * bCols + c];
+
                 result[r * bCols + c] = dot;
             }
         }
+    }
+
+    private static void MatMulF32SingleRow(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols)
+    {
+        var tileCols = 64;
+        var vecSize = Vector<float>.Count;
+
+        for (var cStart = 0; cStart < bCols; cStart += tileCols)
+        {
+            var cEnd = Math.Min(cStart + tileCols, bCols);
+
+            for (var c = cStart; c < cEnd; c++)
+            {
+                var accVec = Vector<float>.Zero;
+                var k = 0;
+
+                for (; k <= aCols - vecSize; k += vecSize)
+                {
+                    var va = new Vector<float>(a.Slice(k, vecSize));
+                    var vb = new Vector<float>(b.Slice(k * bCols + c, vecSize));
+                    accVec += va * vb;
+                }
+
+                var dot = Vector.Dot(accVec, Vector<float>.One);
+                for (; k < aCols; k++)
+                    dot += a[k] * b[k * bCols + c];
+
+                result[c] = dot;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float DotProduct(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    {
+        var n = a.Length;
+        var vecSize = Vector<float>.Count;
+        var accVec = Vector<float>.Zero;
+        var i = 0;
+
+        for (; i <= n - vecSize; i += vecSize)
+        {
+            var va = new Vector<float>(a.Slice(i, vecSize));
+            var vb = new Vector<float>(b.Slice(i, vecSize));
+            accVec += va * vb;
+        }
+
+        var dot = Vector.Dot(accVec, Vector<float>.One);
+
+        for (; i < n; i++)
+            dot += a[i] * b[i];
+
+        return dot;
     }
 
     private static void DequantizeRow(ReadOnlySpan<byte> src, Span<float> dst, GgmlType type, int row, int rowElements)

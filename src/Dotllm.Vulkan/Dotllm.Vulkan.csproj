@@ -4,6 +4,7 @@
     <RootNamespace>Dotllm.Vulkan</RootNamespace>
     <AssemblyName>Dotllm.Vulkan</AssemblyName>
     <PackageId>Dotllm.Vulkan</PackageId>
+    <Description>Vulkan GPU compute backend for the dotllm GGUF inference runtime</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>

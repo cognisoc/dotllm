@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dotllm.Core\Dotllm.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dotllm.Metal\Dotllm.Metal.csproj" />
   </ItemGroup>
 
 </Project>

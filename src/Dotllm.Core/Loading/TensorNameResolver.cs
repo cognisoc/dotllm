@@ -76,6 +76,12 @@ internal sealed class TensorNameResolver
     public GgufTensorInfo? TryLayerNorm2Weight(int layer) =>
         TryGet($"blk.{layer}.attn_norm_2.weight") ?? TryGet($"blk.{layer}.ffn_norm.weight");
 
+    public GgufTensorInfo? TryConvWeight(int layer) =>
+        TryGet($"blk.{layer}.conv1d.weight");
+
+    public GgufTensorInfo? TryConvBias(int layer) =>
+        TryGet($"blk.{layer}.conv1d.bias");
+
     public ResolvedLayerTensors ResolveLayer(int layer, TransformerConfig config)
     {
         var normWeight = LayerNormWeight(layer);
@@ -116,6 +122,8 @@ internal sealed class TensorNameResolver
             FfnGateWeight = ffnGateWeight,
             PostAttentionNormWeight = TryPostAttentionNormWeight(layer),
             PostFfnNormWeight = TryPostFfnNormWeight(layer),
+            ConvWeight = TryConvWeight(layer),
+            ConvBias = TryConvBias(layer),
         };
     }
 }
@@ -136,4 +144,6 @@ internal sealed class ResolvedLayerTensors
     public GgufTensorInfo? FfnGateWeight { get; init; }
     public GgufTensorInfo? PostAttentionNormWeight { get; init; }
     public GgufTensorInfo? PostFfnNormWeight { get; init; }
+    public GgufTensorInfo? ConvWeight { get; init; }
+    public GgufTensorInfo? ConvBias { get; init; }
 }

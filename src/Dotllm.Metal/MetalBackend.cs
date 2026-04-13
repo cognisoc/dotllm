@@ -47,6 +47,13 @@ public sealed class MetalBackend : IComputeBackend
         CompileKernel("silu_inplace", MetalShaders.SiluInPlace);
         CompileKernel("gelu", MetalShaders.Gelu);
         CompileKernel("matmul_f32", MetalShaders.MatMulF32);
+        CompileKernel("matmul_q4_0", MetalShaders.MatMulQ4_0);
+        CompileKernel("matmul_q8_0", MetalShaders.MatMulQ8_0);
+        CompileKernel("matmul_q4_k", MetalShaders.MatMulQ4_K);
+        CompileKernel("matmul_q6_k", MetalShaders.MatMulQ6_K);
+        CompileKernel("matmul_q2_k", MetalShaders.MatMulQ2_K);
+        CompileKernel("matmul_q3_k", MetalShaders.MatMulQ3_K);
+        CompileKernel("matmul_q5_k", MetalShaders.MatMulQ5_K);
     }
 
     private void CompileKernel(string name, string source)
@@ -339,15 +346,171 @@ public sealed class MetalBackend : IComputeBackend
         ReleaseScratch();
     }
 
-    private void GpuMatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols)
+    private void GpuMatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols, string? weightKey)
     {
         var m = _metal!;
         var aBuf = UploadScratch(a);
-        var bBuf = UploadScratch(b);
+        var bBuf = weightKey is not null
+            ? UploadPersistentFloats("w_" + weightKey, b)
+            : UploadScratch(b);
         var resultBuf = AllocScratch((ulong)result.Length * 4);
 
         using var scope = new ComputeScope(m);
         MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_f32"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ4_0(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q4_0"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ8_0(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q8_0"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ4K(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q4_k"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ6K(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q6_k"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ2K(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q2_k"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ3K(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q3_k"]);
+        MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
+        MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
+        MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)aCols, 3);
+        MetalInterop.SetBytesUint(scope.Encoder, (uint)bCols, 4);
+        MetalInterop.Dispatch1D(scope.Encoder, (uint)bCols, 256);
+
+        m.CopyFromBuffer(resultBuf, result);
+        ReleaseScratch();
+    }
+
+    private void GpuMatMulQ5K(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, int aCols, int bCols, string? weightKey)
+    {
+        var m = _metal!;
+        var aBuf = UploadScratch(a);
+        var bBuf = weightKey is not null
+            ? UploadPersistentBytes("w_" + weightKey, b)
+            : UploadScratchBytes(b);
+        var resultBuf = AllocScratch((ulong)result.Length * 4);
+
+        using var scope = new ComputeScope(m);
+        MetalInterop.SetPipeline(scope.Encoder, _pipelines["matmul_q5_k"]);
         MetalInterop.SetBuffer(scope.Encoder, aBuf, 0, 0);
         MetalInterop.SetBuffer(scope.Encoder, bBuf, 0, 1);
         MetalInterop.SetBuffer(scope.Encoder, resultBuf, 0, 2);
@@ -465,13 +628,43 @@ public sealed class MetalBackend : IComputeBackend
 
     public int ArgMax(ReadOnlySpan<float> input) => VectorMath.ArgMax(input);
 
-    public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols)
-        => Tensors.TensorOps.MatMul(a, b, result, bType, aCols, bCols);
-
-    public void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols)
+    public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols, string? weightKey = null)
     {
         if (_gpuAvailable && _metal != null && bCols >= 256 && aCols >= 256)
-            GpuMatMulF32(a, b, result, aCols, bCols);
+        {
+            switch (bType)
+            {
+                case GgmlType.Q4_0:
+                    GpuMatMulQ4_0(a, b, result, aCols, bCols, weightKey);
+                    return;
+                case GgmlType.Q8_0:
+                    GpuMatMulQ8_0(a, b, result, aCols, bCols, weightKey);
+                    return;
+                case GgmlType.Q4_K:
+                    GpuMatMulQ4K(a, b, result, aCols, bCols, weightKey);
+                    return;
+                case GgmlType.Q6_K:
+                    GpuMatMulQ6K(a, b, result, aCols, bCols, weightKey);
+                    return;
+                case GgmlType.Q2_K:
+                    GpuMatMulQ2K(a, b, result, aCols, bCols, weightKey);
+                    return;
+                case GgmlType.Q3_K:
+                    GpuMatMulQ3K(a, b, result, aCols, bCols, weightKey);
+                    return;
+                case GgmlType.Q5_K:
+                    GpuMatMulQ5K(a, b, result, aCols, bCols, weightKey);
+                    return;
+            }
+        }
+
+        Tensors.TensorOps.MatMul(a, b, result, bType, aCols, bCols);
+    }
+
+    public void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols, string? weightKey = null)
+    {
+        if (_gpuAvailable && _metal != null && bCols >= 256 && aCols >= 256)
+            GpuMatMulF32(a, b, result, aCols, bCols, weightKey);
         else
             Tensors.TensorOps.MatMulF32(a, b, result, aCols, bCols);
     }

@@ -18,6 +18,7 @@ public sealed class InferenceEngine
     private readonly float[] _ropeFreqs;
     private KvCache _kvCache;
     private InferenceBuffers _buffers;
+    private ConvStateCache? _convCache;
 
     public InferenceEngine(LoadedModel model) : this(model, new CpuBackend()) { }
 
@@ -30,6 +31,7 @@ public sealed class InferenceEngine
         _tokenizer = model.Tokenizer;
         _buffers = new InferenceBuffers(_cfg);
         _kvCache = new KvCache(_cfg.LayerCount, _cfg.KvDim, _cfg.ContextLength);
+        _convCache = _cfg.HasConvLayers ? new ConvStateCache(_cfg.LayerCount, _cfg.HiddenSize, _cfg.ConvKernelSize) : null;
         _ropeFreqs = PrecomputeRopeFrequencies(_cfg);
     }
 
@@ -56,6 +58,7 @@ public sealed class InferenceEngine
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _kvCache.Reset();
+        _convCache?.Reset();
 
         foreach (var token in promptTokens)
         {
@@ -148,7 +151,7 @@ public sealed class InferenceEngine
                 if (layerType == LayerType.Attention)
                     ProcessLlamaLikeLayer(layer, position, hiddenState, kvCache, buf);
                 else
-                    ProcessConvLayer(layer, hiddenState, buf);
+                    ProcessConvLayer(layer, position, hiddenState, kvCache, buf);
                 break;
         }
     }
@@ -188,24 +191,38 @@ public sealed class InferenceEngine
         if (_cfg.HasPostNorm) ApplyPostNorm(hs, layer, isAttnPostNorm: false);
     }
 
-    private void ProcessConvLayer(int layer, float[] hiddenState, InferenceBuffers buf)
+    private void ProcessConvLayer(int layer, int position, float[] hiddenState, KvCache kvCache, InferenceBuffers buf)
     {
         var hs = hiddenState.AsSpan(0, _cfg.HiddenSize);
         var layerTensors = _tn.ResolveLayer(layer, _cfg);
-        if (layerTensors.FfnGateWeight is null) return;
 
-        var gateTensor = _model.GetTensor(layerTensors.FfnGateWeight.Name);
-        var upTensor = _model.GetTensor(layerTensors.FfnUpWeight!.Name);
-        var downTensor = _model.GetTensor(layerTensors.FfnDownWeight.Name);
+        ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: true);
 
-        var gateCols = (int)(gateTensor.ElementCount / (ulong)_cfg.HiddenSize);
-        var upCols = (int)(upTensor.ElementCount / (ulong)_cfg.HiddenSize);
+        if (layerTensors.ConvWeight is not null && _convCache is not null)
+        {
+            var convWeight = _model.GetTensor(layerTensors.ConvWeight.Name);
+            var convWeightData = MemoryMarshal.Cast<byte, float>(convWeight.Data.Span);
+            var kernelSize = _cfg.ConvKernelSize;
 
-        MatMulFromTensor(hs, gateTensor, buf.FfnBuf.AsSpan(0, gateCols), gateCols);
-        _backend.SiluInPlace(buf.FfnBuf.AsSpan(0, gateCols));
-        MatMulFromTensor(hs, upTensor, buf.ConvBuf.AsSpan(0, upCols), upCols);
-        _backend.Mul(buf.FfnBuf.AsSpan(0, gateCols), buf.ConvBuf.AsSpan(0, gateCols), buf.FfnBuf.AsSpan(0, gateCols));
-        MatMulFromTensor(buf.FfnBuf.AsSpan(0, gateCols), downTensor, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize), _cfg.HiddenSize);
+            var convInput = _convCache.BuildInput(layer, buf.NormBuf, position);
+            _backend.Conv1D(convInput, convWeightData, buf.ConvBuf.AsSpan(0, _cfg.HiddenSize), kernelSize, _cfg.HiddenSize);
+            _convCache.Store(layer, buf.NormBuf);
+
+            if (layerTensors.ConvBias is not null)
+            {
+                var biasData = MemoryMarshal.Cast<byte, float>(_model.GetTensor(layerTensors.ConvBias.Name).Data.Span);
+                _backend.Add(buf.ConvBuf.AsSpan(0, _cfg.HiddenSize), biasData);
+            }
+
+            _backend.Add(hs, buf.ConvBuf.AsSpan(0, _cfg.HiddenSize));
+        }
+        else
+        {
+            _convCache?.Store(layer, buf.NormBuf);
+        }
+
+        ApplyNorm(hs, buf.NormBuf2, layer, isAttnNorm: false);
+        FfnForward(layer, buf.NormBuf2, buf.FfnBuf, buf.FfnResultBuf);
         _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
@@ -271,31 +288,40 @@ public sealed class InferenceEngine
         var attnStart = _cfg.SlidingWindow > 0 ? Math.Max(0, seqLen - _cfg.SlidingWindow) : 0;
         var result = buf.AttnResultBuf.AsSpan(0, qDim);
         var scoreBuf = buf.AttnOutBuf.AsSpan(0, hidden);
+        var keys = kvCache.GetKeys(layer);
+        var values = kvCache.GetValues(layer);
+        var attnLen = seqLen - attnStart;
+        var groupSize = headCount / headCountKv;
+        var invSqrtHeadDim = 1f / MathF.Sqrt(headDim);
 
-        for (var h = 0; h < headCount; h++)
+        for (var kvH = 0; kvH < headCountKv; kvH++)
         {
-            var kvGroup = h / (headCount / headCountKv);
-            var qSlice = q.Slice(h * headDim, headDim);
-            var keys = kvCache.GetKeys(layer);
-            var values = kvCache.GetValues(layer);
+            var kvKeyOff = kvH * headDim;
+            var kvValOff = kvH * headDim;
 
-            for (var s = attnStart; s < seqLen; s++)
+            for (var qInGroup = 0; qInGroup < groupSize; qInGroup++)
             {
-                var dot = 0f;
+                var h = kvH * groupSize + qInGroup;
+                var qSlice = q.Slice(h * headDim, headDim);
+
+                for (var s = attnStart; s < seqLen; s++)
+                {
+                    var dot = 0f;
+                    var kOff = s * kvDim + kvKeyOff;
+                    for (var d = 0; d < headDim; d++)
+                        dot += qSlice[d] * keys[kOff + d];
+                    scoreBuf[s - attnStart] = dot * invSqrtHeadDim;
+                }
+
+                _backend.Softmax(scoreBuf[..attnLen], _cfg.AttnLogitSoftcap);
+
                 for (var d = 0; d < headDim; d++)
-                    dot += qSlice[d] * keys[s * kvDim + kvGroup * headDim + d];
-                scoreBuf[s - attnStart] = dot / MathF.Sqrt(headDim);
-            }
-
-            var attnLen = seqLen - attnStart;
-            _backend.Softmax(scoreBuf[..attnLen], _cfg.AttnLogitSoftcap);
-
-            for (var d = 0; d < headDim; d++)
-            {
-                var val = 0f;
-                for (var s = 0; s < attnLen; s++)
-                    val += scoreBuf[s] * values[(attnStart + s) * kvDim + kvGroup * headDim + d];
-                result[h * headDim + d] = val;
+                {
+                    var val = 0f;
+                    for (var s = 0; s < attnLen; s++)
+                        val += scoreBuf[s] * values[(attnStart + s) * kvDim + kvValOff + d];
+                    result[h * headDim + d] = val;
+                }
             }
         }
 
@@ -420,11 +446,11 @@ public sealed class InferenceEngine
         if (weight.ElementType == GgmlType.F32)
         {
             var weightData = MemoryMarshal.Cast<byte, float>(weight.Data.Span);
-            _backend.MatMulF32(input, weightData, output, _cfg.HiddenSize, cols);
+            _backend.MatMulF32(input, weightData, output, _cfg.HiddenSize, cols, weight.Name);
         }
         else
         {
-            _backend.MatMul(input, weight.Data.Span, output, weight.ElementType, _cfg.HiddenSize, cols);
+            _backend.MatMul(input, weight.Data.Span, output, weight.ElementType, _cfg.HiddenSize, cols, weight.Name);
         }
     }
 

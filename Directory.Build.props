@@ -8,4 +8,28 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <NoWarn>CA1707,CA1720</NoWarn>
   </PropertyGroup>
+
+  <!-- NuGet package metadata (applied to all packable projects) -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>cognisoc</Authors>
+    <Company>cognisoc</Company>
+    <Copyright>Copyright (c) 2026 cognisoc</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/cognisoc/dotllm</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/cognisoc/dotllm.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>llm;gguf;inference;ai;dotnet;local-ai;machine-learning</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- SourceLink for debugging into source -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!-- Include README.md in all packages -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

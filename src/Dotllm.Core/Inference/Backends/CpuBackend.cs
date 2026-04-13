@@ -8,10 +8,10 @@ namespace Dotllm.Inference;
 internal sealed class CpuBackend : IComputeBackend
 {
     public void Dispose() { }
-    public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols) =>
+    public void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, GgmlType bType, int aCols, int bCols, string? weightKey = null) =>
         TensorOps.MatMul(a, b, result, bType, aCols, bCols);
 
-    public void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols) =>
+    public void MatMulF32(ReadOnlySpan<float> a, ReadOnlySpan<float> b, Span<float> result, int aCols, int bCols, string? weightKey = null) =>
         TensorOps.MatMulF32(a, b, result, aCols, bCols);
 
     public void RmsNorm(ReadOnlySpan<float> input, ReadOnlySpan<float> weights, Span<float> output, float epsilon) =>

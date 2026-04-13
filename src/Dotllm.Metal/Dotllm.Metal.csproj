@@ -4,6 +4,7 @@
     <RootNamespace>Dotllm.Metal</RootNamespace>
     <AssemblyName>Dotllm.Metal</AssemblyName>
     <PackageId>Dotllm.Metal</PackageId>
+    <Description>Apple Metal GPU compute backend for the dotllm GGUF inference runtime</Description>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
