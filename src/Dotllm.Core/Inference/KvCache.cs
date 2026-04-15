@@ -20,11 +20,11 @@ internal sealed class KvCache
         _valueBuffer = new float[layerCount * maxSeqLen * kvDim];
     }
 
-    public Span<float> GetKeys(int layer) =>
-        _keyBuffer.AsSpan(layer * _maxSeqLen * _kvDim, _currentPos * _kvDim);
+    public Span<float> GetKeys(int layer, int seqLen) =>
+        _keyBuffer.AsSpan(layer * _maxSeqLen * _kvDim, seqLen * _kvDim);
 
-    public Span<float> GetValues(int layer) =>
-        _valueBuffer.AsSpan(layer * _maxSeqLen * _kvDim, _currentPos * _kvDim);
+    public Span<float> GetValues(int layer, int seqLen) =>
+        _valueBuffer.AsSpan(layer * _maxSeqLen * _kvDim, seqLen * _kvDim);
 
     public Span<float> GetKeySlot(int layer, int position)
     {

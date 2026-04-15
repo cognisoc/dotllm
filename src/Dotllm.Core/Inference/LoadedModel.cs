@@ -57,7 +57,7 @@ public sealed class LoadedModel : IDisposable
             return cached;
 
         var tensor = GetTensor(name);
-        var size = tensor.RowCount > 0 ? tensor.RowCount * tensor.ColumnCount : (int)tensor.ElementCount;
+        var size = (int)tensor.ElementCount;
         var result = new float[size];
         var byteCount = (int)TensorSize.ByteCount(tensor.ElementType, (ulong)size);
         TensorOps.DequantizeToFloat(tensor.Data.Span[..byteCount], result, tensor.ElementType, tensor.RowCount > 0 ? tensor.RowCount : 1, size / Math.Max(tensor.RowCount, 1));

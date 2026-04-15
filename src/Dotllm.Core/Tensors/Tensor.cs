@@ -9,6 +9,6 @@ internal sealed class Tensor
     public GgmlType ElementType { get; init; }
     public Memory<byte> Data { get; init; }
     public ulong ElementCount { get; init; }
-    public int RowCount => Dimensions.Length > 0 ? (int)Dimensions[0] : 0;
-    public int ColumnCount => Dimensions.Length > 1 ? (int)Dimensions[1] : (int)ElementCount;
+    public int RowCount => Dimensions.Length > 1 ? (int)Dimensions[1] : 1;
+    public int ColumnCount => Dimensions.Length > 0 ? (int)Dimensions[0] : 0;
 }

@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
 using Dotllm.Loading;
 using Dotllm.Tensors.Dequantize;
 using Dotllm.Tensors.Numeric;
@@ -114,6 +115,7 @@ internal static class TensorOps
             {
                 var off = (int)(rowOffset + blk * blockBytes);
                 var d = HalfHelper.HalfToFloat(b, off);
+                var baseIdx = blk * blockSize;
 
                 for (var i = 0; i < halfBlock; i++)
                 {
@@ -121,10 +123,11 @@ internal static class TensorOps
                     var v0 = ((qs & 0x0F) - 8f) * d;
                     var v1 = (((qs >> 4) & 0x0F) - 8f) * d;
 
-                    fused[fusedIdx] = a[fusedIdx] * v0;
-                    fused[fusedIdx + 1] = a[fusedIdx + 1] * v1;
-                    fusedIdx += 2;
+                    fused[baseIdx + i] = a[baseIdx + i] * v0;
+                    fused[baseIdx + i + halfBlock] = a[baseIdx + i + halfBlock] * v1;
                 }
+
+                fusedIdx += blockSize;
             }
 
             var accVec = Vector<float>.Zero;
@@ -202,21 +205,21 @@ internal static class TensorOps
 
             for (var c = 0; c < bCols; c++)
             {
-                var dot = 0f;
+                var bRow = b.Slice(c * aCols, aCols);
                 var accVec = Vector<float>.Zero;
                 var k = 0;
 
                 for (; k <= aCols - vecSize; k += vecSize)
                 {
                     var va = new Vector<float>(aRow.Slice(k, vecSize));
-                    var vb = new Vector<float>(b.Slice(k * bCols + c, vecSize));
+                    var vb = new Vector<float>(bRow.Slice(k, vecSize));
                     accVec += va * vb;
                 }
 
-                dot = Vector.Dot(accVec, Vector<float>.One);
+                var dot = Vector.Dot(accVec, Vector<float>.One);
 
                 for (; k < aCols; k++)
-                    dot += aRow[k] * b[k * bCols + c];
+                    dot += aRow[k] * bRow[k];
 
                 result[r * bCols + c] = dot;
             }
@@ -234,19 +237,20 @@ internal static class TensorOps
 
             for (var c = cStart; c < cEnd; c++)
             {
+                var bRow = b.Slice(c * aCols, aCols);
                 var accVec = Vector<float>.Zero;
                 var k = 0;
 
                 for (; k <= aCols - vecSize; k += vecSize)
                 {
                     var va = new Vector<float>(a.Slice(k, vecSize));
-                    var vb = new Vector<float>(b.Slice(k * bCols + c, vecSize));
+                    var vb = new Vector<float>(bRow.Slice(k, vecSize));
                     accVec += va * vb;
                 }
 
                 var dot = Vector.Dot(accVec, Vector<float>.One);
                 for (; k < aCols; k++)
-                    dot += a[k] * b[k * bCols + c];
+                    dot += a[k] * bRow[k];
 
                 result[c] = dot;
             }
@@ -294,6 +298,21 @@ internal static class TensorOps
             case GgmlType.Q8_0:
                 DequantizeQ8_0.Dequantize(slice, dst, 1, rowElements);
                 break;
+            case GgmlType.Q2_K:
+                DequantizeK.DequantizeQ2_K(slice, dst, 1, rowElements);
+                break;
+            case GgmlType.Q3_K:
+                DequantizeK.DequantizeQ3_K(slice, dst, 1, rowElements);
+                break;
+            case GgmlType.Q4_K:
+                DequantizeK.DequantizeQ4_K(slice, dst, 1, rowElements);
+                break;
+            case GgmlType.Q5_K:
+                DequantizeK.DequantizeQ5_K(slice, dst, 1, rowElements);
+                break;
+            case GgmlType.Q6_K:
+                DequantizeK.DequantizeQ6_K(slice, dst, 1, rowElements);
+                break;
             default:
                 DequantizeGeneric(slice, dst, type, 1, rowElements);
                 break;
@@ -315,10 +334,11 @@ internal static class TensorOps
                         var off = r * blocksPerRow * blockSizeBytes + b * blockSizeBytes;
                         var d = HalfHelper.HalfToFloat(src, off);
                         var m = HalfHelper.HalfToFloat(src, off + 2);
-                        for (var i = 0; i < blockElements; i++)
+                        for (var j = 0; j < blockElements / 2; j++)
                         {
-                            var nibble = (src[off + 4 + i / 2] >> ((i & 1) * 4)) & 0x0F;
-                            dst[r * rowElements + b * blockElements + i] = d * nibble - m * 8;
+                            var qs = src[off + 4 + j];
+                            dst[r * rowElements + b * blockElements + j] = d * (qs & 0x0F) + m;
+                            dst[r * rowElements + b * blockElements + j + blockElements / 2] = d * ((qs >> 4) & 0x0F) + m;
                         }
                     }
                     break;
@@ -333,14 +353,14 @@ internal static class TensorOps
                     {
                         var off = r * blocksPerRow * blockSizeBytes + b * blockSizeBytes;
                         var d = HalfHelper.HalfToFloat(src, off);
-                        var qh = src[off + 2];
-                        for (var i = 0; i < blockElements; i++)
+                        var qh = BinaryPrimitives.ReadUInt32LittleEndian(src.Slice(off + 2, 4));
+                        for (var j = 0; j < blockElements / 2; j++)
                         {
-                            var byteIdx = 3 + i / 2;
-                            var nibble = (src[off + byteIdx] >> ((i & 1) * 4)) & 0x0F;
-                            var high = (qh >> i) & 1;
-                            var val = nibble + high * 16;
-                            dst[r * rowElements + b * blockElements + i] = (val - 16) * d;
+                            var qs = src[off + 6 + j];
+                            var x0 = ((qs & 0x0F) | (int)(((qh >> (j + 0)) << 4) & 0x10)) - 16;
+                            var x1 = (((qs >> 4) & 0x0F) | (int)((qh >> (j + 12)) & 0x10)) - 16;
+                            dst[r * rowElements + b * blockElements + j] = x0 * d;
+                            dst[r * rowElements + b * blockElements + j + blockElements / 2] = x1 * d;
                         }
                     }
                     break;
@@ -356,14 +376,14 @@ internal static class TensorOps
                         var off = r * blocksPerRow * blockSizeBytes + b * blockSizeBytes;
                         var d = HalfHelper.HalfToFloat(src, off);
                         var m = HalfHelper.HalfToFloat(src, off + 2);
-                        var qh = src[off + 4];
-                        for (var i = 0; i < blockElements; i++)
+                        var qh = BinaryPrimitives.ReadUInt32LittleEndian(src.Slice(off + 4, 4));
+                        for (var j = 0; j < blockElements / 2; j++)
                         {
-                            var byteIdx = 5 + i / 2;
-                            var nibble = (src[off + byteIdx] >> ((i & 1) * 4)) & 0x0F;
-                            var high = (qh >> i) & 1;
-                            var val = nibble + high * 16;
-                            dst[r * rowElements + b * blockElements + i] = d * val - m * 16;
+                            var qs = src[off + 8 + j];
+                            var x0 = (qs & 0x0F) | (int)(((qh >> (j + 0)) << 4) & 0x10);
+                            var x1 = ((qs >> 4) & 0x0F) | (int)((qh >> (j + 12)) & 0x10);
+                            dst[r * rowElements + b * blockElements + j] = d * x0 + m;
+                            dst[r * rowElements + b * blockElements + j + blockElements / 2] = d * x1 + m;
                         }
                     }
                     break;
@@ -377,6 +397,7 @@ internal static class TensorOps
     {
         var actualRotaryDim = rotaryDim > 0 ? rotaryDim : headDim;
         var halfDim = actualRotaryDim / 2;
+        var sameSpan = query == key;
 
         for (var i = 0; i < halfDim; i++)
         {
@@ -385,23 +406,26 @@ internal static class TensorOps
             var cosVal = MathF.Cos(angle);
             var sinVal = MathF.Sin(angle);
 
-            var qIdx = i;
-            var qHalfIdx = i + halfDim;
-            var q0 = query[qIdx];
-            var q1 = query[qHalfIdx];
-            query[qIdx] = q0 * cosVal - q1 * sinVal;
-            query[qHalfIdx] = q0 * sinVal + q1 * cosVal;
+            var idx = i;
+            var halfIdx = i + halfDim;
+            var q0 = query[idx];
+            var q1 = query[halfIdx];
+            query[idx] = q0 * cosVal - q1 * sinVal;
+            query[halfIdx] = q0 * sinVal + q1 * cosVal;
 
-            var k0 = key[qIdx];
-            var k1 = key[qHalfIdx];
-            key[qIdx] = k0 * cosVal - k1 * sinVal;
-            key[qHalfIdx] = k0 * sinVal + k1 * cosVal;
+            if (sameSpan) continue;
+
+            var k0 = key[idx];
+            var k1 = key[halfIdx];
+            key[idx] = k0 * cosVal - k1 * sinVal;
+            key[halfIdx] = k0 * sinVal + k1 * cosVal;
         }
     }
 
     public static void ApplyRoPE(Span<float> query, Span<float> key, int headDim, int position, ReadOnlySpan<float> freqTable)
     {
         var halfDim = freqTable.Length;
+        var sameSpan = query == key;
 
         for (var i = 0; i < halfDim; i++)
         {
@@ -409,28 +433,30 @@ internal static class TensorOps
             var cosVal = MathF.Cos(angle);
             var sinVal = MathF.Sin(angle);
 
-            var qIdx = i;
-            var qHalfIdx = i + halfDim;
-            var q0 = query[qIdx];
-            var q1 = query[qHalfIdx];
-            query[qIdx] = q0 * cosVal - q1 * sinVal;
-            query[qHalfIdx] = q0 * sinVal + q1 * cosVal;
+            var idx = i;
+            var halfIdx = i + halfDim;
+            var q0 = query[idx];
+            var q1 = query[halfIdx];
+            query[idx] = q0 * cosVal - q1 * sinVal;
+            query[halfIdx] = q0 * sinVal + q1 * cosVal;
 
-            var k0 = key[qIdx];
-            var k1 = key[qHalfIdx];
-            key[qIdx] = k0 * cosVal - k1 * sinVal;
-            key[qHalfIdx] = k0 * sinVal + k1 * cosVal;
+            if (sameSpan) continue;
+
+            var k0 = key[idx];
+            var k1 = key[halfIdx];
+            key[idx] = k0 * cosVal - k1 * sinVal;
+            key[halfIdx] = k0 * sinVal + k1 * cosVal;
         }
     }
 
     public static void Conv1D(ReadOnlySpan<float> input, ReadOnlySpan<float> weights, Span<float> output, int kernelSize, int inputDim)
     {
-        for (var i = 0; i < inputDim; i++)
+        for (var c = 0; c < inputDim; c++)
         {
             var sum = 0f;
             for (var k = 0; k < kernelSize; k++)
-                sum += input[k * inputDim + i] * weights[k * inputDim + i];
-            output[i] = sum;
+                sum += input[c * kernelSize + k] * weights[c * kernelSize + k];
+            output[c] = sum;
         }
     }
 }

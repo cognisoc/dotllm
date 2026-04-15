@@ -19,7 +19,7 @@ internal static class HalfHelper
             var shift = 0;
             while ((normalized & 0x400) == 0) { normalized <<= 1; shift++; }
 
-            var newExp = 127 - 15 - shift;
+            var newExp = 127 - 14 - shift;
             var newMantissa = (normalized & 0x3FF) << 13;
             var bits = ((uint)sign << 31) | ((uint)newExp << 23) | (uint)newMantissa;
             return BitConverter.Int32BitsToSingle((int)bits);

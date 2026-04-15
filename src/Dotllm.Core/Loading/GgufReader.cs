@@ -65,7 +65,7 @@ internal sealed class GgufReader
         GgufValueType.UInt32 => reader.ReadUInt32LittleEndian(),
         GgufValueType.Int32 => reader.ReadInt32LittleEndian(),
         GgufValueType.Float32 => reader.ReadSingleLittleEndian(),
-        GgufValueType.Bool => reader.ReadUInt32LittleEndian() != 0,
+        GgufValueType.Bool => reader.ReadByte() != 0,
         GgufValueType.String => ReadGgufString(reader),
         GgufValueType.UInt64 => reader.ReadUInt64LittleEndian(),
         GgufValueType.Int64 => reader.ReadInt64LittleEndian(),
@@ -105,7 +105,7 @@ internal sealed class GgufReader
             var nDimensions = reader.ReadUInt32LittleEndian();
             var dimensions = new uint[nDimensions];
             for (var d = 0; d < nDimensions; d++)
-                dimensions[d] = reader.ReadUInt32LittleEndian();
+                dimensions[d] = (uint)reader.ReadUInt64LittleEndian();
 
             var type = (GgmlType)reader.ReadUInt32LittleEndian();
             var offset = reader.ReadUInt64LittleEndian();

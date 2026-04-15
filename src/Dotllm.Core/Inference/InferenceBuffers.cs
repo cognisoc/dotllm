@@ -16,6 +16,7 @@ internal sealed class InferenceBuffers
     public readonly float[] FfnBuf;
     public readonly float[] FfnResultBuf;
     public readonly float[] ConvBuf;
+    public readonly float[] ScoreBuf;
 
     public InferenceBuffers(TransformerConfig cfg)
     {
@@ -34,8 +35,10 @@ internal sealed class InferenceBuffers
         VBuf = new float[kvDim];
         AttnOutBuf = new float[hidden];
         AttnResultBuf = new float[qDim];
-        FfnBuf = new float[ffnDim];
+        var maxIntermediate = Math.Max(2 * ffnDim, 3 * hidden);
+        FfnBuf = new float[maxIntermediate];
         FfnResultBuf = new float[hidden];
         ConvBuf = new float[ffnDim];
+        ScoreBuf = new float[Math.Max(hidden, cfg.ContextLength)];
     }
 }

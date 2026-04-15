@@ -33,7 +33,10 @@ internal static class ArchitectureResolver
         var contextLength = GetInt(meta, arch, "context_length");
         var ffnDim = GetInt(meta, arch, "feed_forward_length");
         var headCount = GetInt(meta, arch, "attention.head_count");
-        var headCountKv = GetOrDefaultInt(meta, arch, "attention.head_count_kv", headCount);
+        var headCountKvRaw = GetOrDefaultArray(meta, arch, "attention.head_count_kv");
+        var headCountKv = headCountKvRaw is { Length: > 0 }
+            ? headCountKvRaw.Max()
+            : GetOrDefaultInt(meta, arch, "attention.head_count_kv", headCount);
         var headDim = GetOrDefaultInt(meta, arch, "attention.key_length", hiddenSize / Math.Max(headCount, 1));
         var vocabSize = ResolveVocabSize(meta);
 
@@ -60,7 +63,7 @@ internal static class ArchitectureResolver
         var expertFfnDim = GetOrDefaultInt(meta, arch, "expert_feed_forward_length", 0);
 
         var hasConvLayers = template == ExecutionTemplate.Lfm2Like;
-        var convKernelSize = hasConvLayers ? GetOrDefaultInt(meta, arch, "conv_L_cache", 3) : 0;
+        var convKernelSize = hasConvLayers ? GetOrDefaultInt(meta, arch, "shortconv.l_cache", 3) : 0;
         var layerTypes = hasConvLayers
             ? ResolveLayerTypes(model, layerCount)
             : CreateAllAttentionLayers(layerCount);
@@ -80,6 +83,7 @@ internal static class ArchitectureResolver
             AttentionType = attentionType,
             HeadCount = headCount,
             HeadCountKv = headCountKv,
+            HeadCountKvPerLayer = headCountKvRaw,
             HeadDim = headDim,
             QkvLayout = qkvLayout,
             NormType = normType,
@@ -220,14 +224,28 @@ internal static class ArchitectureResolver
         return defaultValue;
     }
 
+    private static int[] GetOrDefaultArray(GgufMetadata meta, string arch, string key)
+    {
+        if (meta.TryGetValue($"{arch}.{key}", out var val) && val is not null && val.Value is object[] arr)
+        {
+            var result = new int[arr.Length];
+            for (var i = 0; i < arr.Length; i++)
+                result[i] = Convert.ToInt32(arr[i], CultureInfo.InvariantCulture);
+            return result;
+        }
+        return [];
+    }
+
     private static LayerType[] ResolveLayerTypes(GgufModel model, int layerCount)
     {
         var types = new LayerType[layerCount];
         for (var i = 0; i < layerCount; i++)
         {
-            var hasAttnTensors = model.TensorInfos.Any(t =>
-                t.Name.StartsWith($"blk.{i}.attn_", StringComparison.OrdinalIgnoreCase));
-            types[i] = hasAttnTensors ? LayerType.Attention : LayerType.Conv;
+            var hasAttentionWeights = model.TensorInfos.Any(t =>
+                t.Name.Equals($"blk.{i}.attn_q.weight", StringComparison.OrdinalIgnoreCase) ||
+                t.Name.Equals($"blk.{i}.attn_k.weight", StringComparison.OrdinalIgnoreCase) ||
+                t.Name.Equals($"blk.{i}.attn_qkv.weight", StringComparison.OrdinalIgnoreCase));
+            types[i] = hasAttentionWeights ? LayerType.Attention : LayerType.Conv;
         }
         return types;
     }

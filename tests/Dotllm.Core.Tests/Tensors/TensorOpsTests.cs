@@ -26,10 +26,10 @@ public class TensorOpsTests
 
         TensorOps.MatMulF32(a, b, result, aCols: 3, bCols: 2);
 
-        Assert.Equal(58f, result[0], 0.001f);
-        Assert.Equal(64f, result[1], 0.001f);
-        Assert.Equal(139f, result[2], 0.001f);
-        Assert.Equal(154f, result[3], 0.001f);
+        Assert.Equal(50f, result[0], 0.001f);
+        Assert.Equal(68f, result[1], 0.001f);
+        Assert.Equal(122f, result[2], 0.001f);
+        Assert.Equal(167f, result[3], 0.001f);
     }
 
     [Fact]
@@ -58,5 +58,25 @@ public class TensorOpsTests
         Assert.Equal(1f, q[0], 0.001f);
         Assert.Equal(0f, q[1], 0.001f);
         Assert.Equal(1f, k[0], 0.001f);
+    }
+
+    [Fact]
+    public void ApplyRoPE_SameSpan_AppliesOnce()
+    {
+        var data = new float[128];
+        for (var i = 0; i < 128; i++) data[i] = 1f;
+        var separate = new float[128];
+        Array.Copy(data, separate, 128);
+
+        var span = data.AsSpan();
+        TensorOps.ApplyRoPE(span, span, headDim: 128, position: 1, freqBase: 10000f, rotaryDim: 128);
+
+        var q = new float[128];
+        var k = new float[128];
+        for (var i = 0; i < 128; i++) { q[i] = 1f; k[i] = 1f; }
+        TensorOps.ApplyRoPE(q, k, headDim: 128, position: 1, freqBase: 10000f, rotaryDim: 128);
+
+        for (var i = 0; i < 128; i++)
+            Assert.Equal(q[i], data[i], 0.0001f);
     }
 }

@@ -19,6 +19,7 @@ public sealed class InferenceEngine
     private KvCache _kvCache;
     private InferenceBuffers _buffers;
     private ConvStateCache? _convCache;
+    private readonly Dictionary<string, float[]> _convWeightCache = new(StringComparer.OrdinalIgnoreCase);
 
     public InferenceEngine(LoadedModel model) : this(model, new CpuBackend()) { }
 
@@ -60,13 +61,21 @@ public sealed class InferenceEngine
         _kvCache.Reset();
         _convCache?.Reset();
 
-        foreach (var token in promptTokens)
+        float[]? logits = null;
+
+        for (var i = 0; i < promptTokens.Length; i++)
         {
-            ProcessToken(token, 0, _kvCache, _buffers);
+            logits = ProcessToken(promptTokens[i], i, _kvCache, _buffers);
             _kvCache.Advance();
         }
 
-        var lastToken = promptTokens.Length > 0 ? promptTokens[^1] : 0;
+        if (logits is null)
+        {
+            var initialToken = _cfg.BosTokenId > 0 ? _cfg.BosTokenId : 0;
+            logits = ProcessToken(initialToken, 0, _kvCache, _buffers);
+            _kvCache.Advance();
+        }
+
         var generated = 0;
         var stopSequences = options.StopSequences;
         var generatedText = new System.Text.StringBuilder();
@@ -75,13 +84,10 @@ public sealed class InferenceEngine
 
         while (generated < options.MaxTokens && !cancellationToken.IsCancellationRequested)
         {
-            var logits = ProcessToken(lastToken, _kvCache.CurrentPosition, _kvCache, _buffers);
-
             if (_cfg.FinalLogitSoftcap.HasValue)
                 _backend.Softcap(logits, _cfg.FinalLogitSoftcap.Value);
 
             var nextToken = SampleToken(logits, options.Sampling, recentTokens);
-            _kvCache.Advance();
             recentTokens.Add(nextToken);
             if (recentTokens.Count > repeatWindowSize + 1)
                 recentTokens.RemoveRange(0, recentTokens.Count - repeatWindowSize - 1);
@@ -101,7 +107,8 @@ public sealed class InferenceEngine
                 }
             }
 
-            lastToken = nextToken;
+            logits = ProcessToken(nextToken, _kvCache.CurrentPosition, _kvCache, _buffers);
+            _kvCache.Advance();
             generated++;
         }
     }
@@ -123,11 +130,11 @@ public sealed class InferenceEngine
     private void GetEmbedding(int token, float[] output)
     {
         var emb = _model.GetTensor("token_embd.weight");
-        var rowElements = emb.ColumnCount;
-        var rowBytes = (int)TensorSize.ByteCount(emb.ElementType, (ulong)rowElements);
+        var hiddenSize = (int)emb.Dimensions[0];
+        var rowBytes = (int)TensorSize.ByteCount(emb.ElementType, (ulong)hiddenSize);
         var offset = token * rowBytes;
         var src = emb.Data.Span.Slice(offset, rowBytes);
-        _backend.DequantizeToFloat(src, output.AsSpan(0, rowElements), emb.ElementType, 1, rowElements);
+        _backend.DequantizeToFloat(src, output.AsSpan(0, hiddenSize), emb.ElementType, 1, hiddenSize);
     }
 
     private void ProcessLayer(int layer, int position, float[] hiddenState, KvCache kvCache, InferenceBuffers buf)
@@ -198,23 +205,44 @@ public sealed class InferenceEngine
 
         ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: true);
 
-        if (layerTensors.ConvWeight is not null && _convCache is not null)
+        if (layerTensors.ConvInProj is not null && layerTensors.ConvWeight is not null && _convCache is not null)
         {
-            var convWeight = _model.GetTensor(layerTensors.ConvWeight.Name);
-            var convWeightData = MemoryMarshal.Cast<byte, float>(convWeight.Data.Span);
-            var kernelSize = _cfg.ConvKernelSize;
+            var inProjTensor = _model.GetTensor(layerTensors.ConvInProj.Name);
+            var convWeightTensor = _model.GetTensor(layerTensors.ConvWeight.Name);
+            var convWeightFloat = GetDequantizedConvWeights(convWeightTensor);
 
-            var convInput = _convCache.BuildInput(layer, buf.NormBuf, position);
-            _backend.Conv1D(convInput, convWeightData, buf.ConvBuf.AsSpan(0, _cfg.HiddenSize), kernelSize, _cfg.HiddenSize);
-            _convCache.Store(layer, buf.NormBuf);
+            var hidden = _cfg.HiddenSize;
+            var inProjCols = (int)(inProjTensor.ElementCount / (ulong)hidden);
+            var inProjBuf = inProjCols <= buf.FfnBuf.Length ? buf.FfnBuf : new float[inProjCols];
 
-            if (layerTensors.ConvBias is not null)
+            MatMulFromTensor(buf.NormBuf, inProjTensor, inProjBuf.AsSpan(0, inProjCols), inProjCols);
+
+            var bChunk = inProjBuf.AsSpan(0, hidden);
+            var cChunk = inProjBuf.AsSpan(hidden, hidden);
+            var xChunk = inProjBuf.AsSpan(2 * hidden, hidden);
+
+            for (var i = 0; i < hidden; i++)
+                buf.ConvBuf[i] = bChunk[i] * xChunk[i];
+
+            var convInput = _convCache.BuildInput(layer, buf.ConvBuf.AsSpan(0, hidden), position);
+            _backend.Conv1D(convInput, convWeightFloat, buf.QBuf.AsSpan(0, hidden), _cfg.ConvKernelSize, hidden);
+            _convCache.Store(layer, buf.ConvBuf.AsSpan(0, hidden));
+
+            for (var i = 0; i < hidden; i++)
+                buf.QBuf[i] *= cChunk[i];
+
+            if (layerTensors.ConvOutProj is not null)
             {
-                var biasData = MemoryMarshal.Cast<byte, float>(_model.GetTensor(layerTensors.ConvBias.Name).Data.Span);
-                _backend.Add(buf.ConvBuf.AsSpan(0, _cfg.HiddenSize), biasData);
+                var outProjTensor = _model.GetTensor(layerTensors.ConvOutProj.Name);
+                var outProjCols = (int)(outProjTensor.ElementCount / (ulong)hidden);
+                MatMulFromTensor(buf.QBuf.AsSpan(0, hidden), outProjTensor, buf.AttnResultBuf.AsSpan(0, hidden), outProjCols);
+            }
+            else
+            {
+                buf.QBuf.AsSpan(0, hidden).CopyTo(buf.AttnResultBuf);
             }
 
-            _backend.Add(hs, buf.ConvBuf.AsSpan(0, _cfg.HiddenSize));
+            _backend.Add(hs, buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize));
         }
         else
         {
@@ -226,25 +254,52 @@ public sealed class InferenceEngine
         _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
+    private float[] GetDequantizedConvWeights(Tensor convWeightTensor)
+    {
+        var key = convWeightTensor.Name;
+        if (_convWeightCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var size = (int)convWeightTensor.ElementCount;
+        var result = new float[size];
+        if (convWeightTensor.ElementType == GgmlType.F32)
+        {
+            var floatData = MemoryMarshal.Cast<byte, float>(convWeightTensor.Data.Span);
+            floatData.CopyTo(result);
+        }
+        else
+        {
+            var byteCount = (int)TensorSize.ByteCount(convWeightTensor.ElementType, (ulong)size);
+            TensorOps.DequantizeToFloat(convWeightTensor.Data.Span[..byteCount], result, convWeightTensor.ElementType,
+                convWeightTensor.RowCount,
+                convWeightTensor.ColumnCount);
+        }
+
+        _convWeightCache[key] = result;
+        return result;
+    }
+
     private void AttentionForward(int layer, int position, ReadOnlySpan<float> input, KvCache kvCache, InferenceBuffers buf)
     {
         var headDim = _cfg.HeadDim;
         var headCount = _cfg.HeadCount;
-        var headCountKv = _cfg.HeadCountKv;
+        var layerHeadCountKv = _cfg.HeadCountKvPerLayer.Length > layer
+            ? Math.Max(_cfg.HeadCountKvPerLayer[layer], 1)
+            : _cfg.HeadCountKv;
         var qDim = _cfg.QDim;
-        var kvDim = _cfg.KvDim;
+        var layerKvDim = layerHeadCountKv * headDim;
         var hidden = _cfg.HiddenSize;
 
         var q = buf.QBuf.AsSpan(0, qDim);
-        var k = buf.KBuf.AsSpan(0, kvDim);
-        var v = buf.VBuf.AsSpan(0, kvDim);
+        var k = buf.KBuf.AsSpan(0, layerKvDim);
+        var v = buf.VBuf.AsSpan(0, layerKvDim);
 
         var layerTensors = _tn.ResolveLayer(layer, _cfg);
 
         if (_cfg.QkvLayout == QkvLayout.Fused && layerTensors.FusedQkvWeight is not null)
         {
             var fusedTensor = _model.GetTensor(layerTensors.FusedQkvWeight.Name);
-            var fusedCols = qDim + 2 * kvDim;
+            var fusedCols = qDim + 2 * layerKvDim;
             MatMulFromTensor(input, fusedTensor, q[..Math.Min(qDim, fusedCols)], fusedCols);
         }
         else
@@ -269,13 +324,27 @@ public sealed class InferenceEngine
             }
         }
 
+        if (layerTensors.AttentionQNorm is not null)
+        {
+            var qNormWeights = _model.GetDequantizedWeights(layerTensors.AttentionQNorm.Name);
+            for (var h = 0; h < headCount; h++)
+                _backend.RmsNorm(q.Slice(h * headDim, headDim), qNormWeights, q.Slice(h * headDim, headDim), _cfg.NormEpsilon);
+        }
+
         for (var h = 0; h < headCount; h++)
         {
             var qHead = q.Slice(h * headDim, headDim);
             _backend.ApplyRoPE(qHead, qHead, headDim, position, _ropeFreqs);
         }
 
-        for (var h = 0; h < headCountKv; h++)
+        if (layerTensors.AttentionKNorm is not null)
+        {
+            var kNormWeights = _model.GetDequantizedWeights(layerTensors.AttentionKNorm.Name);
+            for (var h = 0; h < layerHeadCountKv; h++)
+                _backend.RmsNorm(k.Slice(h * headDim, headDim), kNormWeights, k.Slice(h * headDim, headDim), _cfg.NormEpsilon);
+        }
+
+        for (var h = 0; h < layerHeadCountKv; h++)
         {
             var kHead = k.Slice(h * headDim, headDim);
             var vHead = v.Slice(h * headDim, headDim);
@@ -286,15 +355,16 @@ public sealed class InferenceEngine
 
         var seqLen = position + 1;
         var attnStart = _cfg.SlidingWindow > 0 ? Math.Max(0, seqLen - _cfg.SlidingWindow) : 0;
-        var result = buf.AttnResultBuf.AsSpan(0, qDim);
-        var scoreBuf = buf.AttnOutBuf.AsSpan(0, hidden);
-        var keys = kvCache.GetKeys(layer);
-        var values = kvCache.GetValues(layer);
         var attnLen = seqLen - attnStart;
-        var groupSize = headCount / headCountKv;
+        var result = buf.AttnResultBuf.AsSpan(0, qDim);
+        var scoreBuf = buf.ScoreBuf.AsSpan(0, attnLen);
+        var keys = kvCache.GetKeys(layer, seqLen);
+        var values = kvCache.GetValues(layer, seqLen);
+        var groupSize = headCount / layerHeadCountKv;
         var invSqrtHeadDim = 1f / MathF.Sqrt(headDim);
+        var globalKvDim = _cfg.KvDim;
 
-        for (var kvH = 0; kvH < headCountKv; kvH++)
+        for (var kvH = 0; kvH < layerHeadCountKv; kvH++)
         {
             var kvKeyOff = kvH * headDim;
             var kvValOff = kvH * headDim;
@@ -307,7 +377,7 @@ public sealed class InferenceEngine
                 for (var s = attnStart; s < seqLen; s++)
                 {
                     var dot = 0f;
-                    var kOff = s * kvDim + kvKeyOff;
+                    var kOff = s * globalKvDim + kvKeyOff;
                     for (var d = 0; d < headDim; d++)
                         dot += qSlice[d] * keys[kOff + d];
                     scoreBuf[s - attnStart] = dot * invSqrtHeadDim;
@@ -319,16 +389,18 @@ public sealed class InferenceEngine
                 {
                     var val = 0f;
                     for (var s = 0; s < attnLen; s++)
-                        val += scoreBuf[s] * values[(attnStart + s) * kvDim + kvValOff + d];
+                        val += scoreBuf[s] * values[(attnStart + s) * globalKvDim + kvValOff + d];
                     result[h * headDim + d] = val;
                 }
             }
         }
 
-        var outWeight = layerTensors.AttnOutputWeight;
+        var outWeight = layerTensors.AttnOutputWeight!;
         var outTensor = _model.GetTensor(outWeight.Name);
         var outCols = (int)(outTensor.ElementCount / (ulong)(headCount * headDim));
-        MatMulFromTensor(result, outTensor, buf.AttnResultBuf.AsSpan(0, hidden), outCols);
+        var projected = buf.AttnOutBuf.AsSpan(0, hidden);
+        MatMulFromTensor(result, outTensor, projected, outCols);
+        projected.CopyTo(buf.AttnResultBuf.AsSpan(0, hidden));
     }
 
     private void FfnForward(int layer, ReadOnlySpan<float> input, float[] ffnBuf, float[] resultBuf)
@@ -352,8 +424,8 @@ public sealed class InferenceEngine
             else
                 _backend.Gelu(ffnBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(0, gateCols));
 
-            MatMulFromTensor(input, upTensor, resultBuf.AsSpan(0, upCols), upCols);
-            _backend.Mul(ffnBuf.AsSpan(0, gateCols), resultBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(0, gateCols));
+            MatMulFromTensor(input, upTensor, ffnBuf.AsSpan(gateCols, upCols), upCols);
+            _backend.Mul(ffnBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(gateCols, upCols), ffnBuf.AsSpan(0, gateCols));
             MatMulFromTensor(ffnBuf.AsSpan(0, gateCols), downTensor, resultBuf.AsSpan(0, hidden), hidden);
         }
         else
@@ -401,7 +473,8 @@ public sealed class InferenceEngine
 
     private void ApplyFinalNorm(Span<float> hiddenState)
     {
-        var weights = _model.GetDequantizedWeights("output_norm.weight");
+        var name = _model.TryGetTensor("output_norm.weight", out _) ? "output_norm.weight" : "token_embd_norm.weight";
+        var weights = _model.GetDequantizedWeights(name);
         var tmp = hiddenState.ToArray();
         _backend.RmsNorm(tmp, weights, hiddenState, _cfg.NormEpsilon);
     }
@@ -414,28 +487,14 @@ public sealed class InferenceEngine
         else
             outputTensor = _model.GetTensor("token_embd.weight");
 
-        var vocabSize = _cfg.VocabSize;
-        var rowBytes = (int)TensorSize.ByteCount(outputTensor.ElementType, (ulong)_cfg.HiddenSize);
-
-        float[]? rented = null;
-        Span<float> tmp = _cfg.HiddenSize <= 4096 ? stackalloc float[_cfg.HiddenSize] : (rented = System.Buffers.ArrayPool<float>.Shared.Rent(_cfg.HiddenSize));
-
-        try
+        if (outputTensor.ElementType == GgmlType.F32)
         {
-            for (var i = 0; i < Math.Min(vocabSize, logits.Length); i++)
-            {
-                var rowSrc = outputTensor.Data.Span.Slice(i * rowBytes, rowBytes);
-                _backend.DequantizeToFloat(rowSrc, tmp, outputTensor.ElementType, 1, _cfg.HiddenSize);
-                var dot = 0f;
-                for (var j = 0; j < _cfg.HiddenSize; j++)
-                    dot += hiddenState[j] * tmp[j];
-                logits[i] = dot;
-            }
+            var weightData = MemoryMarshal.Cast<byte, float>(outputTensor.Data.Span);
+            _backend.MatMulF32(hiddenState, weightData, logits, _cfg.HiddenSize, _cfg.VocabSize, outputTensor.Name);
         }
-        finally
+        else
         {
-            if (rented is not null)
-                System.Buffers.ArrayPool<float>.Shared.Return(rented);
+            _backend.MatMul(hiddenState, outputTensor.Data.Span, logits, outputTensor.ElementType, _cfg.HiddenSize, _cfg.VocabSize, outputTensor.Name);
         }
 
         return logits;
@@ -443,14 +502,16 @@ public sealed class InferenceEngine
 
     private void MatMulFromTensor(ReadOnlySpan<float> input, Tensor weight, Span<float> output, int cols)
     {
+        var inDim = weight.ColumnCount;
+
         if (weight.ElementType == GgmlType.F32)
         {
             var weightData = MemoryMarshal.Cast<byte, float>(weight.Data.Span);
-            _backend.MatMulF32(input, weightData, output, _cfg.HiddenSize, cols, weight.Name);
+            _backend.MatMulF32(input[..inDim], weightData, output, inDim, cols, weight.Name);
         }
         else
         {
-            _backend.MatMul(input, weight.Data.Span, output, weight.ElementType, _cfg.HiddenSize, cols, weight.Name);
+            _backend.MatMul(input[..inDim], weight.Data.Span, output, weight.ElementType, inDim, cols, weight.Name);
         }
     }
 

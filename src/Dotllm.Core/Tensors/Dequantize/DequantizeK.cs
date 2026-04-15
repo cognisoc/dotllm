@@ -155,25 +155,32 @@ internal static class DequantizeK
                 var off = rowOffset + b * blockSizeBytes;
                 var d = HalfHelper.HalfToFloat(src, off + 208);
 
-                for (var i = 0; i < qk; i++)
+                for (var n = 0; n < qk; n += 128)
                 {
-                    var g = i / 16;
-                    var j = i % 16;
+                    var qlBase = off + n / 2;
+                    var qhBase = off + 128 + n / 4;
+                    var scBase = off + 192 + (n / 16);
 
-                    int qlVal;
-                    if (g < 8)
-                        qlVal = src[off + 16 * g + j];
-                    else
-                        qlVal = src[off + 16 * (g - 8) + j + 128];
+                    for (var l = 0; l < 32; l++)
+                    {
+                        var isIdx = l / 16;
 
-                    var qhIdx = 4 * g + j / 4;
-                    var qhShift = 2 * (j % 4);
-                    var qhBits = (src[off + 128 + qhIdx] >> qhShift) & 0x3;
+                        var q1 = ((src[qlBase + l] & 0xF) | (((src[qhBase + l] >> 0) & 3) << 4)) - 32;
+                        var q2 = ((src[qlBase + l + 32] & 0xF) | (((src[qhBase + l] >> 2) & 3) << 4)) - 32;
+                        var q3 = ((src[qlBase + l] >> 4) | (((src[qhBase + l] >> 4) & 3) << 4)) - 32;
+                        var q4 = ((src[qlBase + l + 32] >> 4) | (((src[qhBase + l] >> 6) & 3) << 4)) - 32;
 
-                    var q6 = (qlVal | (qhBits << 4)) - 32;
-                    var sc = (sbyte)src[off + 192 + g];
+                        var sc0 = (sbyte)src[scBase + isIdx + 0];
+                        var sc2 = (sbyte)src[scBase + isIdx + 2];
+                        var sc4 = (sbyte)src[scBase + isIdx + 4];
+                        var sc6 = (sbyte)src[scBase + isIdx + 6];
 
-                    dst[dstOffset + b * qk + i] = d * sc * q6;
+                        var dstBase = dstOffset + b * qk + n;
+                        dst[dstBase + l] = d * sc0 * q1;
+                        dst[dstBase + l + 32] = d * sc2 * q2;
+                        dst[dstBase + l + 64] = d * sc4 * q3;
+                        dst[dstBase + l + 96] = d * sc6 * q4;
+                    }
                 }
             }
         }

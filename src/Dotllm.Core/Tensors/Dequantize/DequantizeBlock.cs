@@ -21,11 +21,11 @@ internal static class DequantizeQ4_0
                 var blockOffset = rowOffset + b * blockSizeBytes;
                 var scale = HalfHelper.HalfToFloat(src, blockOffset);
 
-                for (var i = 0; i < blockElements; i++)
+                for (var j = 0; j < blockElements / 2; j++)
                 {
-                    var byteIdx = 2 + i / 2;
-                    var nibble = (src[blockOffset + byteIdx] >> ((i & 1) * 4)) & 0x0F;
-                    dst[dstOffset + b * blockElements + i] = (nibble - 8) * scale;
+                    var qs = src[blockOffset + 2 + j];
+                    dst[dstOffset + b * blockElements + j] = ((qs & 0x0F) - 8) * scale;
+                    dst[dstOffset + b * blockElements + j + blockElements / 2] = (((qs >> 4) & 0x0F) - 8) * scale;
                 }
             }
         }

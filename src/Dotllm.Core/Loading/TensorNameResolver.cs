@@ -77,10 +77,22 @@ internal sealed class TensorNameResolver
         TryGet($"blk.{layer}.attn_norm_2.weight") ?? TryGet($"blk.{layer}.ffn_norm.weight");
 
     public GgufTensorInfo? TryConvWeight(int layer) =>
-        TryGet($"blk.{layer}.conv1d.weight");
+        TryGet($"blk.{layer}.conv1d.weight") ?? TryGet($"blk.{layer}.shortconv.conv.weight");
 
     public GgufTensorInfo? TryConvBias(int layer) =>
-        TryGet($"blk.{layer}.conv1d.bias");
+        TryGet($"blk.{layer}.conv1d.bias") ?? TryGet($"blk.{layer}.shortconv.conv.bias");
+
+    public GgufTensorInfo? TryConvInProj(int layer) =>
+        TryGet($"blk.{layer}.shortconv.in_proj.weight");
+
+    public GgufTensorInfo? TryConvOutProj(int layer) =>
+        TryGet($"blk.{layer}.shortconv.out_proj.weight");
+
+    public GgufTensorInfo? TryAttentionQNorm(int layer) =>
+        TryGet($"blk.{layer}.attn_q_norm.weight");
+
+    public GgufTensorInfo? TryAttentionKNorm(int layer) =>
+        TryGet($"blk.{layer}.attn_k_norm.weight");
 
     public ResolvedLayerTensors ResolveLayer(int layer, TransformerConfig config)
     {
@@ -88,20 +100,27 @@ internal sealed class TensorNameResolver
         var normBias = TryLayerNormBias(layer);
         var ffnNormWeight = TryFfnNormWeight(layer);
 
+        var isAttention = config.LayerTypes.Length > layer && config.LayerTypes[layer] == LayerType.Attention;
+
         (GgufTensorInfo q, GgufTensorInfo k, GgufTensorInfo v) qkvTensors = default;
         GgufTensorInfo? fusedQkvWeight = null;
+        GgufTensorInfo? attnOutputWeight = null;
 
-        if (config.QkvLayout == QkvLayout.Fused)
+        if (isAttention)
         {
-            fusedQkvWeight = TryFusedQkvWeight(layer)
-                ?? throw new KeyNotFoundException($"Expected fused QKV tensor 'blk.{layer}.attn_qkv.weight' for QkvLayout.Fused.");
-        }
-        else
-        {
-            qkvTensors = GetSeparateQkv(layer);
+            if (config.QkvLayout == QkvLayout.Fused)
+            {
+                fusedQkvWeight = TryFusedQkvWeight(layer)
+                    ?? throw new KeyNotFoundException($"Expected fused QKV tensor 'blk.{layer}.attn_qkv.weight' for QkvLayout.Fused.");
+            }
+            else
+            {
+                qkvTensors = GetSeparateQkv(layer);
+            }
+
+            attnOutputWeight = AttentionOutputWeight(layer);
         }
 
-        var attnOutputWeight = AttentionOutputWeight(layer);
         var ffnUpWeight = FfnUpWeight(layer);
         var ffnDownWeight = FfnDownWeight(layer);
         var ffnGateWeight = TryFfnGateWeight(layer);
@@ -124,6 +143,10 @@ internal sealed class TensorNameResolver
             PostFfnNormWeight = TryPostFfnNormWeight(layer),
             ConvWeight = TryConvWeight(layer),
             ConvBias = TryConvBias(layer),
+            ConvInProj = TryConvInProj(layer),
+            ConvOutProj = TryConvOutProj(layer),
+            AttentionQNorm = TryAttentionQNorm(layer),
+            AttentionKNorm = TryAttentionKNorm(layer),
         };
     }
 }
@@ -138,7 +161,7 @@ internal sealed class ResolvedLayerTensors
     public GgufTensorInfo? K { get; init; }
     public GgufTensorInfo? V { get; init; }
     public GgufTensorInfo? FusedQkvWeight { get; init; }
-    public GgufTensorInfo AttnOutputWeight { get; init; } = null!;
+    public GgufTensorInfo? AttnOutputWeight { get; init; }
     public GgufTensorInfo FfnUpWeight { get; init; } = null!;
     public GgufTensorInfo FfnDownWeight { get; init; } = null!;
     public GgufTensorInfo? FfnGateWeight { get; init; }
@@ -146,4 +169,8 @@ internal sealed class ResolvedLayerTensors
     public GgufTensorInfo? PostFfnNormWeight { get; init; }
     public GgufTensorInfo? ConvWeight { get; init; }
     public GgufTensorInfo? ConvBias { get; init; }
+    public GgufTensorInfo? ConvInProj { get; init; }
+    public GgufTensorInfo? ConvOutProj { get; init; }
+    public GgufTensorInfo? AttentionQNorm { get; init; }
+    public GgufTensorInfo? AttentionKNorm { get; init; }
 }
