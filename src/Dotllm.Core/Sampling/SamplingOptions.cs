@@ -1,5 +1,9 @@
 namespace Dotllm.Sampling;
 
+/// <summary>
+/// Controls token sampling parameters: temperature, top-k, top-p, and repeat penalty.
+/// Use <see cref="Seed"/> >= 0 for deterministic output, or -1 for random sampling.
+/// </summary>
 public sealed class SamplingOptions
 {
     public int TopK { get; init; } = 40;

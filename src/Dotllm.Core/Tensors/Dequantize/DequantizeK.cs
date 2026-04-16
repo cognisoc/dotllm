@@ -186,7 +186,7 @@ internal static class DequantizeK
         }
     }
 
-    private static int Extract6Bit(ReadOnlySpan<byte> src, int baseOffset, int bitOffset)
+    internal static int Extract6Bit(ReadOnlySpan<byte> src, int baseOffset, int bitOffset)
     {
         var byteIdx = bitOffset / 8;
         var bitShift = bitOffset % 8;

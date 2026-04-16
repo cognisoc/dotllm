@@ -356,17 +356,4 @@ internal sealed class JinjaLexer
         while (sb.Length > 0 && char.IsWhiteSpace(sb[sb.Length - 1]))
             sb.Length--;
     }
-
-    private static void SkipLeadingWhitespace(List<JinjaToken> tokens)
-    {
-        if (tokens.Count > 0 && tokens[tokens.Count - 1].Type == JinjaTokenType.Text)
-        {
-            var last = tokens[tokens.Count - 1];
-            var trimmed = last.Value.TrimStart('\n', '\r');
-            if (trimmed.Length == 0)
-                tokens.RemoveAt(tokens.Count - 1);
-            else if (trimmed.Length != last.Value.Length)
-                tokens[tokens.Count - 1] = new JinjaToken { Type = JinjaTokenType.Text, Value = trimmed };
-        }
-    }
 }

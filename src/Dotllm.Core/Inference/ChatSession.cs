@@ -6,6 +6,10 @@ using Dotllm.Tokenization;
 
 namespace Dotllm.Inference;
 
+/// <summary>
+/// Manages a multi-turn chat conversation with a model, handling prompt formatting,
+/// token encoding/decoding, and stop sequence detection.
+/// </summary>
 public sealed class ChatSession
 {
     private readonly InferenceEngine _engine;
@@ -40,12 +44,26 @@ public sealed class ChatSession
         if (_history.Count == 1 && _config.BosTokenId > 0)
             promptTokens = [_config.BosTokenId, .. promptTokens];
 
+        var eosString = _config.EosTokenId >= 0 ? _tokenizer.Decode([_config.EosTokenId]) : string.Empty;
+        var stopSeqs = new List<string>(options.StopSequences);
+        if (!string.IsNullOrEmpty(eosString))
+            stopSeqs.Add(eosString);
+        if (!string.IsNullOrEmpty(options.StopSequence) && !stopSeqs.Contains(options.StopSequence))
+            stopSeqs.Add(options.StopSequence);
+
+        var effectiveOptions = new GenerationOptions
+        {
+            MaxTokens = options.MaxTokens,
+            Sampling = options.Sampling,
+            StopSequences = stopSeqs.ToArray(),
+        };
+
         var sb = new StringBuilder();
         var prevText = string.Empty;
 
-        await foreach (var tokenId in _engine.Generate(promptTokens, options, cancellationToken))
+        await foreach (var tokenId in _engine.Generate(promptTokens, effectiveOptions, cancellationToken))
         {
-            var piece = _tokenizer.Decode(tokenId);
+            var piece = _tokenizer.Decode([tokenId]);
             sb.Append(piece);
             var currentText = sb.ToString();
 
@@ -58,6 +76,9 @@ public sealed class ChatSession
         }
 
         var assistantText = sb.ToString();
+        if (!string.IsNullOrEmpty(eosString) && assistantText.EndsWith(eosString, StringComparison.Ordinal))
+            assistantText = assistantText[..^eosString.Length];
+
         if (!string.IsNullOrEmpty(assistantText))
             _history.Add(new ChatMessageEntry("assistant", assistantText));
     }

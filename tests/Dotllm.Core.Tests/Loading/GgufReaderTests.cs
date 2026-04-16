@@ -28,7 +28,7 @@ public class GgufReaderTests
 
         Assert.Equal(3u, model.Version);
         Assert.Equal(0u, model.TensorCount);
-        Assert.Equal(0u, model.Metadata_kvCount);
+        Assert.Equal(0u, model.MetadataKvCount);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Dotllm.Tensors.Numeric;
 
@@ -70,7 +71,21 @@ internal static class DequantizeBF16
 {
     public static void Dequantize(ReadOnlySpan<byte> src, Span<float> dst, int count)
     {
-        for (var i = 0; i < count; i++)
+        var vecSize = Vector<float>.Count;
+        var i = 0;
+
+        for (; i <= count - vecSize; i += vecSize)
+        {
+            for (var v = 0; v < vecSize; v++)
+            {
+                var hiByte = src[(i + v) * 2 + 1];
+                var loByte = src[(i + v) * 2];
+                var bits = (hiByte << 24) | (loByte << 16);
+                dst[i + v] = BitConverter.Int32BitsToSingle(bits);
+            }
+        }
+
+        for (; i < count; i++)
         {
             var b0 = src[i * 2];
             var b1 = src[i * 2 + 1];

@@ -9,7 +9,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <PolyfillExe>false</PolyfillExe>
-    <NoWarn>CA1707,CA1720</NoWarn>
+    <NoWarn>CA1707,CA1720,CS1591</NoWarn>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>

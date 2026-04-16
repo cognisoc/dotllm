@@ -1,5 +1,9 @@
 namespace Dotllm.Inference;
 
+/// <summary>
+/// Abstraction for tensor compute operations, allowing backends (CPU, GPU) to be swapped.
+/// All operations operate on contiguous spans of <c>float</c> unless otherwise noted.
+/// </summary>
 public interface IComputeBackend : IDisposable
 {
     void MatMul(ReadOnlySpan<float> a, ReadOnlySpan<byte> b, Span<float> result, Loading.GgmlType bType, int aCols, int bCols, string? weightKey = null);

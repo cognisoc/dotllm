@@ -1,5 +1,8 @@
 namespace Dotllm.Inference;
 
+/// <summary>
+/// Configuration for a single generation call: max tokens, sampling parameters, and stop sequences.
+/// </summary>
 public sealed class GenerationOptions
 {
     public int MaxTokens { get; init; } = 256;

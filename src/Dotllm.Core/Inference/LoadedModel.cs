@@ -6,6 +6,11 @@ using Dotllm.Tokenization;
 
 namespace Dotllm.Inference;
 
+/// <summary>
+/// Represents a GGUF model loaded into memory, ready for inference.
+/// The stream passed to <see cref="Load"/> is owned by this instance and will be
+/// disposed when <see cref="Dispose"/> is called.
+/// </summary>
 public sealed class LoadedModel : IDisposable
 {
     private readonly Stream _stream;
@@ -33,6 +38,10 @@ public sealed class LoadedModel : IDisposable
         Capabilities = ModelCapabilities.FromConfig(config);
     }
 
+    /// <summary>
+    /// Loads a GGUF model from the provided stream. The stream is owned by the
+    /// returned <see cref="LoadedModel"/> and will be disposed when the model is disposed.
+    /// </summary>
     public static LoadedModel Load(Stream stream)
     {
         var ggufModel = GgufReader.Read(stream);

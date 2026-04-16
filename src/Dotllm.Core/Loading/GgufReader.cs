@@ -34,7 +34,7 @@ internal sealed class GgufReader
         {
             Version = version,
             TensorCount = tensorCount,
-            Metadata_kvCount = metadataKvCount,
+            MetadataKvCount = metadataKvCount,
             Metadata = metadata,
             TensorInfos = tensorInfos,
             TensorDataOffset = tensorDataOffset,
