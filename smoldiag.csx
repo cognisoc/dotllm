@@ -1,6 +1,6 @@
-using Dotllm.Inference;
-using Dotllm.Models;
-using Dotllm.Sampling;
+using Llmdot.Inference;
+using Llmdot.Models;
+using Llmdot.Sampling;
 
 using var stream = File.OpenRead(args[0]);
 using var model = LoadedModel.Load(stream);

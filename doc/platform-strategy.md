@@ -2,7 +2,7 @@
 
 ## Core Position
 
-`dotllm` should be a CPU-first runtime with optional GPU compute acceleration paths. This is a strategic choice, not a temporary limitation. A managed CPU implementation provides the broadest portability, the smallest deployment surface, and the clearest baseline for correctness.
+`llmdot` should be a CPU-first runtime with optional GPU compute acceleration paths. This is a strategic choice, not a temporary limitation. A managed CPU implementation provides the broadest portability, the smallest deployment surface, and the clearest baseline for correctness.
 
 ## Why CPU First
 
@@ -24,7 +24,7 @@ Local acceleration is fragmented:
 - Cross-platform GPU portability remains difficult
 - NPU APIs vary by vendor and are graph-compilation-oriented, not compute-oriented
 
-Most available runtimes solve this by making the hardware stack the foundation of the product. `dotllm` should do the opposite: keep the inference engine stable and treat acceleration as an optimization layer.
+Most available runtimes solve this by making the hardware stack the foundation of the product. `llmdot` should do the opposite: keep the inference engine stable and treat acceleration as an optimization layer.
 
 ## Why GPU Compute, Not NPU
 

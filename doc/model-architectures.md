@@ -1,6 +1,6 @@
 # Model Architecture Reference
 
-This document catalogs the architectural properties of major open-weight LLM families in the 1-8B parameter range commonly distributed in GGUF format. It is intended to inform the dotllm runtime's model graph abstraction and GGUF metadata parsing.
+This document catalogs the architectural properties of major open-weight LLM families in the 1-8B parameter range commonly distributed in GGUF format. It is intended to inform the llmdot runtime's model graph abstraction and GGUF metadata parsing.
 
 ## GGUF Architecture Key
 

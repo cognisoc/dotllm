@@ -1,4 +1,4 @@
-# dotllm
+# llmdot
 
 **Run local GGUF language models from .NET — one package, one format, one programming model.**
 
@@ -16,14 +16,14 @@
 
 ---
 
-## What is dotllm
+## What is llmdot
 
-`dotllm` is a native .NET runtime for local language model inference built around the **GGUF** model format. It executes major decoder-only transformer and hybrid architectures in the **1–8B parameter range** — including multimodal variants — through architecture-agnostic execution templates resolved from GGUF metadata at load time.
+`llmdot` is a native .NET runtime for local language model inference built around the **GGUF** model format. It executes major decoder-only transformer and hybrid architectures in the **1–8B parameter range** — including multimodal variants — through architecture-agnostic execution templates resolved from GGUF metadata at load time.
 
 The project is designed around a single opinionated goal: **make local LLM execution in .NET as simple as adding a NuGet package, loading a GGUF file, and streaming tokens**. The default path is pure managed code with zero native runtime dependencies, focused on CPU-first execution. Optional packages provide GPU acceleration through thin backend adapters.
 
 ```csharp
-using Dotllm;
+using Llmdot;
 
 await using var model = await LlmModel.LoadAsync("phi-3-mini-q4_k_m.gguf");
 await using var session = model.CreateChatSession();
@@ -36,7 +36,7 @@ await foreach (var token in session.StreamAsync("Explain GGUF in one paragraph."
 
 ---
 
-## Why dotllm
+## Why llmdot
 
 The .NET inference landscape today forces developers into one of two uncomfortable tradeoffs:
 
@@ -45,7 +45,7 @@ The .NET inference landscape today forces developers into one of two uncomfortab
 | **`llama.cpp` bindings** | Broad model support | Native binaries, per-platform packaging, upstream integration debt |
 | **ONNX-based stacks** | Strong hardware acceleration | Model conversion, large native dependencies, toolchain friction |
 
-`dotllm` takes a third position:
+`llmdot` takes a third position:
 
 - **GGUF-native** execution with no conversion pipeline
 - **Pure managed core** — trimming-friendly, NativeAOT-friendly, single-file publish-friendly
@@ -55,7 +55,7 @@ The .NET inference landscape today forces developers into one of two uncomfortab
 
 ---
 
-## Who dotllm is for
+## Who llmdot is for
 
 **.NET developers** who want to ship local, private, or offline AI features without fighting the inference stack.
 
@@ -63,7 +63,7 @@ The .NET inference landscape today forces developers into one of two uncomfortab
 
 **Teams building on `Microsoft.Extensions.AI`** who need an `IChatClient`-compatible backend that runs fully in-process, with no sidecar services and no native toolchain.
 
-If you have ever thought *"I just want to load a GGUF file in my ASP.NET Core app and stream tokens"* — dotllm is built for you.
+If you have ever thought *"I just want to load a GGUF file in my ASP.NET Core app and stream tokens"* — llmdot is built for you.
 
 ---
 
@@ -103,9 +103,9 @@ See [doc/model-architectures.md](doc/model-architectures.md) for the full refere
  └──────────────┬─────────────────────────────────────────────────┘
                 │  IChatClient / IAsyncEnumerable<string>
  ┌──────────────▼─────────────────────────────────────────────────┐
- │  Dotllm.Extensions.AI   (Microsoft.Extensions.AI integration)  │
+ │  Llmdot.Extensions.AI   (Microsoft.Extensions.AI integration)  │
  ├────────────────────────────────────────────────────────────────┤
- │  Dotllm.Core                                                   │
+ │  Llmdot.Core                                                   │
  │  ┌───────────┐  ┌─────────────────┐  ┌──────────────────────┐  │
  │  │ GGUF      │  │ Architecture    │  │ Sampling & Tokenizer │  │
  │  │ Loader    │─▶│ Resolver        │─▶│                      │  │
@@ -163,11 +163,11 @@ The model graph reads only from a resolved `TransformerConfig` — never from ra
 
 | Package | Purpose | Dependencies |
 |---|---|---|
-| `Dotllm.Core` | GGUF loader, model graph, CPU backend, sampling, tokenizer | Pure managed .NET |
-| `Dotllm.Extensions.AI` | `IChatClient` + `Microsoft.Extensions.AI` integration | `Dotllm.Core` |
-| `Dotllm.Backends.Vulkan` *(planned)* | Vulkan compute acceleration | Native Vulkan loader |
-| `Dotllm.Backends.Metal` *(planned)* | Metal compute acceleration (Apple Silicon) | Native Metal |
-| `Dotllm.Multimodal.Vision` *(planned)* | SigLIP2 vision encoder + connector | `Dotllm.Core` |
+| `Llmdot.Core` | GGUF loader, model graph, CPU backend, sampling, tokenizer | Pure managed .NET |
+| `Llmdot.Extensions.AI` | `IChatClient` + `Microsoft.Extensions.AI` integration | `Llmdot.Core` |
+| `Llmdot.Backends.Vulkan` *(planned)* | Vulkan compute acceleration | Native Vulkan loader |
+| `Llmdot.Backends.Metal` *(planned)* | Metal compute acceleration (Apple Silicon) | Native Metal |
+| `Llmdot.Multimodal.Vision` *(planned)* | SigLIP2 vision encoder + connector | `Llmdot.Core` |
 
 The core runtime is the single required dependency. Everything else is additive and opt-in.
 
@@ -176,16 +176,16 @@ The core runtime is the single required dependency. Everything else is additive 
 ## Repository Layout
 
 ```
-dotllm/
+llmdot/
 ├── src/
-│   ├── Dotllm.Core/              Core runtime: GGUF loader, graph, CPU backend
-│   └── Dotllm.Extensions.AI/     Microsoft.Extensions.AI integration
+│   ├── Llmdot.Core/              Core runtime: GGUF loader, graph, CPU backend
+│   └── Llmdot.Extensions.AI/     Microsoft.Extensions.AI integration
 ├── samples/
-│   └── Dotllm.Sample/            Minimal end-to-end example
+│   └── Llmdot.Sample/            Minimal end-to-end example
 ├── tests/
-│   └── Dotllm.Core.Tests/        Unit and integration tests
+│   └── Llmdot.Core.Tests/        Unit and integration tests
 ├── benches/
-│   └── Dotllm.Benchmarks/        BenchmarkDotNet performance suite
+│   └── Llmdot.Benchmarks/        BenchmarkDotNet performance suite
 └── doc/                          Vision, architecture, roadmap, platform strategy
 ```
 
@@ -228,7 +228,7 @@ Contribution areas most valuable right now:
 
 ## Guiding Principle
 
-> `dotllm` should aim to become the easiest way to run community GGUF models from .NET:
+> `llmdot` should aim to become the easiest way to run community GGUF models from .NET:
 >
 > - one core package to get started
 > - one model format

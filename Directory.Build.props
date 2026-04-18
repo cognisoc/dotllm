@@ -16,8 +16,8 @@
     <Company>cognisoc</Company>
     <Copyright>Copyright (c) 2026 cognisoc</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/cognisoc/dotllm</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/cognisoc/dotllm.git</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/cognisoc/llmdot</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/cognisoc/llmdot.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>llm;gguf;inference;ai;dotnet;local-ai;machine-learning</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

@@ -2,7 +2,7 @@
 
 ## Overview
 
-`dotllm` is a .NET-native local inference runtime for GGUF language models. Its core promise is simple: developers should be able to download a community model, reference a single core package, and run inference in a standard .NET application without managing native binaries or format conversion pipelines.
+`llmdot` is a .NET-native local inference runtime for GGUF language models. Its core promise is simple: developers should be able to download a community model, reference a single core package, and run inference in a standard .NET application without managing native binaries or format conversion pipelines.
 
 The project is not trying to win by out-optimizing specialized CUDA, DirectML, or vendor SDK stacks across every workload. It is trying to win by being the most direct, comprehensible, and portable way to run local language models in the .NET ecosystem.
 
@@ -19,7 +19,7 @@ This creates a gap between model availability and practical application developm
 
 ## Product Thesis
 
-`dotllm` should treat GGUF as the primary model distribution format for local inference in .NET. The community already distributes a large catalog of quantized models in GGUF, and developers should not have to translate them into a different ecosystem before use. Initial releases will target a specific model family and quantization set, expanding coverage as the runtime matures.
+`llmdot` should treat GGUF as the primary model distribution format for local inference in .NET. The community already distributes a large catalog of quantized models in GGUF, and developers should not have to translate them into a different ecosystem before use. Initial releases will target a specific model family and quantization set, expanding coverage as the runtime matures.
 
 The product thesis is:
 
@@ -41,7 +41,7 @@ The initial audience is:
 
 ## Value Proposition
 
-`dotllm` should provide a strong answer to a simple developer question:
+`llmdot` should provide a strong answer to a simple developer question:
 
 "How do I run a local GGUF model in .NET without dragging in a native toolchain or converting formats?"
 
@@ -56,11 +56,11 @@ Its value comes from:
 
 ### Compared with native llama.cpp wrappers
 
-`dotllm` should be easier to package, easier to host, and easier to reason about inside normal .NET applications. It sacrifices some raw performance headroom in exchange for simpler deployment and a more idiomatic developer experience.
+`llmdot` should be easier to package, easier to host, and easier to reason about inside normal .NET applications. It sacrifices some raw performance headroom in exchange for simpler deployment and a more idiomatic developer experience.
 
 ### Compared with ONNX-based runtimes
 
-`dotllm` should be easier to start with, easier to distribute, and more naturally aligned with the models developers are already downloading. It is not expected to beat vendor-optimized ONNX stacks on peak hardware throughput.
+`llmdot` should be easier to start with, easier to distribute, and more naturally aligned with the models developers are already downloading. It is not expected to beat vendor-optimized ONNX stacks on peak hardware throughput.
 
 ## Design Principles
 

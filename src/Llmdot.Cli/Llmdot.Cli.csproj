@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <RootNamespace>Llmdot.Cli</RootNamespace>
+    <AssemblyName>Llmdot.Cli</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>llmdot</ToolCommandName>
+    <PackageId>Llmdot.Cli</PackageId>
+    <Description>CLI tool for llmdot GGUF model inference</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+    <NoWarn>CA1707,CA1720,CA1305,CA1310</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Llmdot.Core\Llmdot.Core.csproj" />
+    <ProjectReference Include="..\Llmdot.Extensions.AI\Llmdot.Extensions.AI.csproj" />
+  </ItemGroup>
+
+</Project>

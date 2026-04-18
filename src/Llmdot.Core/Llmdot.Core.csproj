@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Llmdot</RootNamespace>
+    <AssemblyName>Llmdot.Core</AssemblyName>
+    <PackageId>Llmdot.Core</PackageId>
+    <Description>Native .NET runtime for local GGUF language model inference</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <PolyfillExe>false</PolyfillExe>
+    <NoWarn>CA1707,CA1720,CS1591</NoWarn>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Llmdot.Core.Tests" />
+  </ItemGroup>
+
+</Project>

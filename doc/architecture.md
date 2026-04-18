@@ -2,7 +2,7 @@
 
 ## Overview
 
-`dotllm` uses a layered architecture that separates model loading, execution orchestration, and hardware acceleration. The core runtime is pure managed code. Backend adapters accelerate a narrow set of expensive primitives when available.
+`llmdot` uses a layered architecture that separates model loading, execution orchestration, and hardware acceleration. The core runtime is pure managed code. Backend adapters accelerate a narrow set of expensive primitives when available.
 
 The runtime supports major decoder-only transformer and hybrid architectures in the 1-8B parameter range through **four execution templates** and a unified `TransformerConfig` resolved from GGUF metadata at load time. No per-model code paths are needed — all variation is expressed through configuration.
 
@@ -400,7 +400,7 @@ NPU acceleration may become viable in the future if:
 - NPU op coverage expands to include RoPE, dynamic KV cache, and custom attention
 - A standard "NPU compute shader" API emerges
 
-None of these are likely in the next 2-3 years. If they materialize, the path would be a separate `Dotllm.Backends.Ort` package using ONNX Runtime with platform-specific execution providers — but this requires GGUF-to-ONNX conversion and is therefore an all-or-nothing acceleration model, not the incremental offload pattern.
+None of these are likely in the next 2-3 years. If they materialize, the path would be a separate `Llmdot.Backends.Ort` package using ONNX Runtime with platform-specific execution providers — but this requires GGUF-to-ONNX conversion and is therefore an all-or-nothing acceleration model, not the incremental offload pattern.
 
 ## Packaging Strategy
 

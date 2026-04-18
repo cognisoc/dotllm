@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Llmdot.Vulkan</RootNamespace>
+    <AssemblyName>Llmdot.Vulkan</AssemblyName>
+    <PackageId>Llmdot.Vulkan</PackageId>
+    <Description>Vulkan GPU compute backend for the llmdot GGUF inference runtime</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Llmdot.Core\Llmdot.Core.csproj" />
+  </ItemGroup>
+
+</Project>

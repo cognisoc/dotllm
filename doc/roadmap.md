@@ -2,7 +2,7 @@
 
 ## Roadmap Principles
 
-The roadmap should favor a usable vertical slice over broad early ambition. `dotllm` becomes credible when it can load a real GGUF model, run a complete generation loop, and integrate cleanly into ordinary .NET applications.
+The roadmap should favor a usable vertical slice over broad early ambition. `llmdot` becomes credible when it can load a real GGUF model, run a complete generation loop, and integrate cleanly into ordinary .NET applications.
 
 ## Phase 0: Foundation (COMPLETE)
 
@@ -26,10 +26,10 @@ Decisions:
 - **Key abstraction:** `TransformerConfig` resolved from GGUF metadata at load time eliminates per-architecture code paths. Variation is expressed through config values, not conditional branches on architecture strings.
 - **Acceleration strategy:** GPU compute (Vulkan, Metal) is the target for Phase 4. NPU is not viable for LLM inference today — NPUs are graph compilers, not programmable compute; they share system RAM bandwidth with CPU; they require ONNX conversion. See architecture doc for full analysis.
 - **Project structure:**
-  - `src/Dotllm.Core` — core runtime (GGUF loader, tensors, model graph, sampling, inference)
-  - `tests/Dotllm.Core.Tests` — xunit test project
-  - `benches/Dotllm.Benchmarks` — BenchmarkDotNet harness
-  - `samples/Dotllm.Sample` — console sample app
+  - `src/Llmdot.Core` — core runtime (GGUF loader, tensors, model graph, sampling, inference)
+  - `tests/Llmdot.Core.Tests` — xunit test project
+  - `benches/Llmdot.Benchmarks` — BenchmarkDotNet harness
+  - `samples/Llmdot.Sample` — console sample app
 - **Coding conventions:** C# 13, nullable enabled, warnings as errors, unsafe blocks allowed in core, .editorconfig enforced, `InternalsVisibleTo` for test and extension projects
 
 Exit criteria:
@@ -85,7 +85,7 @@ Goals:
 
 Exit criteria:
 
-- a standard .NET app can consume `dotllm` without custom plumbing
+- a standard .NET app can consume `llmdot` without custom plumbing
 - chat and text generation scenarios are documented
 - unsupported models fail with useful diagnostics
 - all four templates produce correct output for their reference models
@@ -93,7 +93,7 @@ Exit criteria:
 
 ### Phase 2 Milestones
 
-1. **Microsoft.Extensions.AI integration:** `Dotllm.Extensions.AI` project with `DotllmChatClient` implementing `IChatClient`, `DotllmOptions` configuration class, and `AddDotllm()` DI registration. Streaming support via `GetStreamingResponseAsync`.
+1. **Microsoft.Extensions.AI integration:** `Llmdot.Extensions.AI` project with `LlmdotChatClient` implementing `IChatClient`, `LlmdotOptions` configuration class, and `AddLlmdot()` DI registration. Streaming support via `GetStreamingResponseAsync`.
 2. **Chat template formatting:** `ChatTemplate` class parses `tokenizer.chat_template` from GGUF metadata and formats messages for ChatML, Llama-3, Gemma, Phi-3, and Llama-2 templates. Falls back to a simple generic format for unknown templates.
 3. **Public API surface audit:** All implementation-detail types made `internal` with `InternalsVisibleTo` for tests and extensions. Public API limited to: `InferenceEngine`, `LoadedModel`, `ChatSession`, `TransformerConfig`, `GenerationOptions`, `SamplingOptions`, `ModelCapabilities`, `BpeTokenizer`, `ChatTemplate`, `ChatMessageEntry`, and architecture enums.
 4. **Model capability inspection:** `ModelCapabilities` class exposes architecture, template, attention type, MoE status, sliding window, softcapping from `TransformerConfig`.
@@ -155,7 +155,7 @@ Goals:
 4. **GGUF v2 support:** Minimum version requirement lowered from 3 to 2, accepting both v2 and v3 files.
 5. **RoPE scaling (Linear):** `PrecomputeRopeFrequencies` divides all frequencies by `RopeScalingFactor` when `RopeScalingType.Linear` is set, enabling context-extended models.
 6. **Sliding window attention:** `AttentionForward` now applies `SlidingWindow` constraint — only attends to tokens within the sliding window range.
-7. **Sample app:** `Dotllm.Sample` now loads a real GGUF model, prints model capabilities, and runs interactive or single-prompt inference through `ChatSession`.
+7. **Sample app:** `Llmdot.Sample` now loads a real GGUF model, prints model capabilities, and runs interactive or single-prompt inference through `ChatSession`.
 
 ## Phase 4: Optional GPU Compute Backends (IN PROGRESS)
 
@@ -170,8 +170,8 @@ Goals:
 ### Phase 4 Milestones
 
 1. **Compute backend abstraction:** All tensor operations in `InferenceEngine` now route through `IComputeBackend` instead of calling `VectorMath`/`TensorOps` directly. The interface (`IComputeBackend : IDisposable`) covers: MatMul, MatMulF32, RmsNorm, LayerNorm, ApplyRoPE (both overloads), Softmax, Silu, SiluInPlace, Gelu, GeluScalar, Add, Scale, Mul, Softcap, Conv1D, DequantizeToFloat, ArgMax.
-2. **Metal compute backend (GPU dispatch):** `Dotllm.Metal` project with `MetalBackend` implementing `IComputeBackend`. Uses Objective-C runtime P/Invoke (`objc_msgSend`) to call Metal APIs directly from C#. Runtime shader compilation from Metal Shading Language source. GPU dispatch implemented for: RmsNorm, LayerNorm, Softmax, Add (in-place and out-of-place), Scale (in-place and out-of-place), Mul, Silu, SiluInPlace, Gelu, MatMulF32. Operations below a size threshold (256 elements) fall back to CPU. MatMul quantized, ApplyRoPE, DequantizeToFloat, Conv1D, ArgMax remain on CPU. `MetalRuntime.IsAvailable` checks for Metal framework via `NativeLibrary.TryLoad`. `MetalInterop` class manages MTLDevice, MTLCommandQueue, MTLComputePipelineState lifecycle through Objective-C runtime message sends. Persistent and scratch GPU buffer management for weight caching across tokens.
-3. **Vulkan compute backend (structurally complete):** `Dotllm.Vulkan` project with `VulkanBackend` implementing `IComputeBackend`. Includes `VulkanInterop` class with full Vulkan P/Invoke bindings (instance, device, command pool, descriptor pool, pipeline layout, shader module, buffer/memory management, command buffer lifecycle). Includes SPIR-V compute shader source for RmsNorm, Softmax, and element-wise ops. Currently delegates all operations to CPU (`VectorMath`/`TensorOps`) — GPU dispatch requires SPIR-V binary compilation and testing on a Vulkan-capable device. `VulkanRuntime.IsAvailable` checks for `vulkan-1.dll` / `libvulkan.so`.
+2. **Metal compute backend (GPU dispatch):** `Llmdot.Metal` project with `MetalBackend` implementing `IComputeBackend`. Uses Objective-C runtime P/Invoke (`objc_msgSend`) to call Metal APIs directly from C#. Runtime shader compilation from Metal Shading Language source. GPU dispatch implemented for: RmsNorm, LayerNorm, Softmax, Add (in-place and out-of-place), Scale (in-place and out-of-place), Mul, Silu, SiluInPlace, Gelu, MatMulF32. Operations below a size threshold (256 elements) fall back to CPU. MatMul quantized, ApplyRoPE, DequantizeToFloat, Conv1D, ArgMax remain on CPU. `MetalRuntime.IsAvailable` checks for Metal framework via `NativeLibrary.TryLoad`. `MetalInterop` class manages MTLDevice, MTLCommandQueue, MTLComputePipelineState lifecycle through Objective-C runtime message sends. Persistent and scratch GPU buffer management for weight caching across tokens.
+3. **Vulkan compute backend (structurally complete):** `Llmdot.Vulkan` project with `VulkanBackend` implementing `IComputeBackend`. Includes `VulkanInterop` class with full Vulkan P/Invoke bindings (instance, device, command pool, descriptor pool, pipeline layout, shader module, buffer/memory management, command buffer lifecycle). Includes SPIR-V compute shader source for RmsNorm, Softmax, and element-wise ops. Currently delegates all operations to CPU (`VectorMath`/`TensorOps`) — GPU dispatch requires SPIR-V binary compilation and testing on a Vulkan-capable device. `VulkanRuntime.IsAvailable` checks for `vulkan-1.dll` / `libvulkan.so`.
 4. **Backend selection:** `BackendFactory.CreateBestAvailable()` tries Metal on macOS, Vulkan on Linux/Windows, falls back to CPU. `InferenceEngine` accepts `IComputeBackend` in its internal constructor.
 
 ### Remaining Phase 4 Work
@@ -184,7 +184,7 @@ Goals:
 
 ### Why GPU Compute, Not NPU
 
-NPUs are graph execution engines, not programmable compute devices. They cannot dispatch individual MatMul or RoPE operations — they require compiled subgraphs with static shapes, which is fundamentally incompatible with LLM inference (dynamic KV cache, custom attention patterns) and with dotllm's thin backend adapter design. NPUs also share system RAM bandwidth with the CPU, providing no throughput advantage for memory-bound LLM decode. All major LLM frameworks (llama.cpp, MLX) target GPU compute, not NPU. See architecture doc for full analysis.
+NPUs are graph execution engines, not programmable compute devices. They cannot dispatch individual MatMul or RoPE operations — they require compiled subgraphs with static shapes, which is fundamentally incompatible with LLM inference (dynamic KV cache, custom attention patterns) and with llmdot's thin backend adapter design. NPUs also share system RAM bandwidth with the CPU, providing no throughput advantage for memory-bound LLM decode. All major LLM frameworks (llama.cpp, MLX) target GPU compute, not NPU. See architecture doc for full analysis.
 
 ## Phase 5: Ecosystem and Distribution
 
