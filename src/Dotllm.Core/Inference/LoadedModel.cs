@@ -112,4 +112,9 @@ public sealed class LoadedModel : IDisposable
         _disposed = true;
         _stream.Dispose();
     }
+
+    public Loading.ModelValidationResult Validate()
+    {
+        return Loading.ModelValidator.Validate(_ggufModel, Config);
+    }
 }

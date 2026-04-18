@@ -25,6 +25,7 @@ public sealed class InferenceEngine
     private readonly BpeTokenizer _tokenizer;
     private readonly float[] _ropeFreqs;
     private readonly Sampler _sampler;
+    private readonly MoeRouter? _moeRouter;
     private KvCache _kvCache;
     private InferenceBuffers _buffers;
     private ConvStateCache? _convCache;
@@ -50,6 +51,7 @@ public sealed class InferenceEngine
         _kvCache = new KvCache(_cfg.LayerCount, _cfg.KvDim, _cfg.ContextLength);
         _convCache = _cfg.HasConvLayers ? new ConvStateCache(_cfg.LayerCount, _cfg.HiddenSize, _cfg.ConvKernelSize) : null;
         _ropeFreqs = PrecomputeRopeFrequencies(_cfg);
+        _moeRouter = _cfg.ExpertCount > 0 ? new MoeRouter(backend) : null;
     }
 
     private static float[] PrecomputeRopeFrequencies(TransformerConfig cfg)
@@ -186,7 +188,10 @@ public sealed class InferenceEngine
         AttentionForward(layer, position, buf.NormBuf, kvCache, buf);
         _backend.Add(hs, buf.AttnResultBuf.AsSpan(0, _cfg.HiddenSize));
         ApplyNorm(hs, buf.NormBuf, layer, isAttnNorm: false);
-        FfnForward(layer, buf.NormBuf, buf.FfnBuf, buf.FfnResultBuf);
+        if (_cfg.ExpertCount > 0)
+            MoeFfnForward(layer, buf.NormBuf, buf.FfnBuf, buf.FfnResultBuf);
+        else
+            FfnForward(layer, buf.NormBuf, buf.FfnBuf, buf.FfnResultBuf);
         _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
@@ -264,7 +269,10 @@ public sealed class InferenceEngine
         }
 
         ApplyNorm(hs, buf.NormBuf2, layer, isAttnNorm: false);
-        FfnForward(layer, buf.NormBuf2, buf.FfnBuf, buf.FfnResultBuf);
+        if (_cfg.ExpertCount > 0)
+            MoeFfnForward(layer, buf.NormBuf2, buf.FfnBuf, buf.FfnResultBuf);
+        else
+            FfnForward(layer, buf.NormBuf2, buf.FfnBuf, buf.FfnResultBuf);
         _backend.Add(hs, buf.FfnResultBuf.AsSpan(0, _cfg.HiddenSize));
     }
 
@@ -476,6 +484,61 @@ public sealed class InferenceEngine
             _backend.Gelu(ffnBuf.AsSpan(0, upCols), ffnBuf.AsSpan(0, upCols));
             MatMulFromTensor(ffnBuf.AsSpan(0, upCols), downTensor, resultBuf.AsSpan(0, hidden), hidden);
         }
+    }
+
+    private void MoeFfnForward(int layer, ReadOnlySpan<float> input, float[] ffnBuf, float[] resultBuf)
+    {
+        var hidden = _cfg.HiddenSize;
+        var topK = _cfg.ExpertUsedCount;
+        var expertCount = _cfg.ExpertCount;
+
+        // Get MoE gate tensor
+        var layerTensors = _tn.ResolveLayer(layer, _cfg);
+        var gateTensor = _model.GetTensor(layerTensors.MoeGateWeight!.Name);
+
+        // Route
+        _moeRouter!.Route(
+            input, gateTensor.Data.Span, gateTensor.ElementType,
+            hidden, expertCount, topK,
+            _buffers.MoeGateLogits, _buffers.MoeSelectedExperts, _buffers.MoeRoutingWeights);
+
+        // Zero accumulator
+        _buffers.MoeAccumulatorBuf.AsSpan(0, hidden).Clear();
+
+        // Process each selected expert
+        for (var i = 0; i < topK; i++)
+        {
+            var expert = _buffers.MoeSelectedExperts[i];
+            var weight = _buffers.MoeRoutingWeights[i];
+
+            var expertGate = _tn.TryExpertFfnGateWeight(layer, expert);
+            var expertUp = _tn.TryExpertFfnUpWeight(layer, expert);
+            var expertDown = _tn.TryExpertFfnDownWeight(layer, expert);
+
+            if (expertGate is null || expertUp is null || expertDown is null)
+                continue;
+
+            var gateTensorE = _model.GetTensor(expertGate.Name);
+            var upTensorE = _model.GetTensor(expertUp.Name);
+            var downTensorE = _model.GetTensor(expertDown.Name);
+
+            var gateCols = (int)(gateTensorE.ElementCount / (ulong)hidden);
+            var upCols = (int)(upTensorE.ElementCount / (ulong)hidden);
+
+            // SwiGLU FFN through expert tensors
+            MatMulFromTensor(input, gateTensorE, ffnBuf.AsSpan(0, gateCols), gateCols);
+            _backend.SiluInPlace(ffnBuf.AsSpan(0, gateCols));
+            MatMulFromTensor(input, upTensorE, ffnBuf.AsSpan(gateCols, upCols), upCols);
+            _backend.Mul(ffnBuf.AsSpan(0, gateCols), ffnBuf.AsSpan(gateCols, upCols), ffnBuf.AsSpan(0, gateCols));
+            MatMulFromTensor(ffnBuf.AsSpan(0, gateCols), downTensorE, _buffers.MoeExpertResultBuf.AsSpan(0, hidden), hidden);
+
+            // Scale by routing weight and accumulate
+            _backend.Scale(_buffers.MoeExpertResultBuf.AsSpan(0, hidden), weight);
+            _backend.Add(_buffers.MoeAccumulatorBuf.AsSpan(0, hidden), _buffers.MoeExpertResultBuf.AsSpan(0, hidden));
+        }
+
+        // Copy accumulator to result
+        _buffers.MoeAccumulatorBuf.AsSpan(0, hidden).CopyTo(resultBuf);
     }
 
     private void ApplyNorm(Span<float> input, float[] output, int layer, bool isAttnNorm)

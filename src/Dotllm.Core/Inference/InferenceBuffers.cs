@@ -20,6 +20,11 @@ internal sealed class InferenceBuffers
     public readonly float[] ScoreBuf;
     public readonly float[] SamplingBuf;
     public readonly int[] SamplingIdxBuf;
+    public readonly float[] MoeGateLogits;
+    public readonly float[] MoeExpertResultBuf;
+    public readonly float[] MoeAccumulatorBuf;
+    public readonly int[] MoeSelectedExperts;
+    public readonly float[] MoeRoutingWeights;
 
     public InferenceBuffers(TransformerConfig cfg)
     {
@@ -46,5 +51,13 @@ internal sealed class InferenceBuffers
         ScoreBuf = new float[Math.Max(hidden, cfg.ContextLength)];
         SamplingBuf = new float[vocabSize];
         SamplingIdxBuf = new int[vocabSize];
+
+        var expertCount = cfg.ExpertCount;
+        var topK = cfg.ExpertUsedCount;
+        MoeGateLogits = expertCount > 0 ? new float[expertCount] : [];
+        MoeExpertResultBuf = expertCount > 0 ? new float[hidden] : [];
+        MoeAccumulatorBuf = expertCount > 0 ? new float[hidden] : [];
+        MoeSelectedExperts = topK > 0 ? new int[topK] : [];
+        MoeRoutingWeights = topK > 0 ? new float[topK] : [];
     }
 }

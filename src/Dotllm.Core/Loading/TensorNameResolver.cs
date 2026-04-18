@@ -94,6 +94,18 @@ internal sealed class TensorNameResolver
     public GgufTensorInfo? TryAttentionKNorm(int layer) =>
         TryGet($"blk.{layer}.attn_k_norm.weight");
 
+    public GgufTensorInfo? TryMoeGateWeight(int layer) =>
+        TryGet($"blk.{layer}.ffn_gate_inp.weight");
+
+    public GgufTensorInfo? TryExpertFfnGateWeight(int layer, int expert) =>
+        TryGet($"blk.{layer}.ffn_gate.{expert}.weight");
+
+    public GgufTensorInfo? TryExpertFfnUpWeight(int layer, int expert) =>
+        TryGet($"blk.{layer}.ffn_up.{expert}.weight");
+
+    public GgufTensorInfo? TryExpertFfnDownWeight(int layer, int expert) =>
+        TryGet($"blk.{layer}.ffn_down.{expert}.weight");
+
     public ResolvedLayerTensors ResolveLayer(int layer, TransformerConfig config)
     {
         var normWeight = LayerNormWeight(layer);
@@ -124,6 +136,7 @@ internal sealed class TensorNameResolver
         var ffnUpWeight = FfnUpWeight(layer);
         var ffnDownWeight = FfnDownWeight(layer);
         var ffnGateWeight = TryFfnGateWeight(layer);
+        var moeGateWeight = TryMoeGateWeight(layer);
 
         return new ResolvedLayerTensors
         {
@@ -139,6 +152,7 @@ internal sealed class TensorNameResolver
             FfnUpWeight = ffnUpWeight,
             FfnDownWeight = ffnDownWeight,
             FfnGateWeight = ffnGateWeight,
+            MoeGateWeight = moeGateWeight,
             PostAttentionNormWeight = TryPostAttentionNormWeight(layer),
             PostFfnNormWeight = TryPostFfnNormWeight(layer),
             ConvWeight = TryConvWeight(layer),
@@ -165,6 +179,7 @@ internal sealed class ResolvedLayerTensors
     public GgufTensorInfo FfnUpWeight { get; init; } = null!;
     public GgufTensorInfo FfnDownWeight { get; init; } = null!;
     public GgufTensorInfo? FfnGateWeight { get; init; }
+    public GgufTensorInfo? MoeGateWeight { get; init; }
     public GgufTensorInfo? PostAttentionNormWeight { get; init; }
     public GgufTensorInfo? PostFfnNormWeight { get; init; }
     public GgufTensorInfo? ConvWeight { get; init; }

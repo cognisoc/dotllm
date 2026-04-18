@@ -16,6 +16,8 @@ internal sealed class JinjaEvaluator
         _globals = globals;
         _filters = CreateFilters();
         _tests = CreateTests();
+        _globals["raise_exception"] = (Func<object?[], Dictionary<string, object?>, object?>)((args, _) =>
+            throw new InvalidOperationException(args.Length > 0 ? args[0]?.ToString() ?? "Template error" : "Template error"));
     }
 
     public string Evaluate(List<JinjaNode> nodes)
@@ -220,7 +222,11 @@ internal sealed class JinjaEvaluator
         var kwargs = call.Kwargs.ToDictionary(kv => kv.Key, kv => EvalExpr(kv.Value, scope));
 
         if (fn is Delegate del)
-            return del.DynamicInvoke([args.ToArray(), kwargs]);
+        {
+            try { return del.DynamicInvoke([args.ToArray(), kwargs]); }
+            catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException is not null)
+            { throw tie.InnerException; }
+        }
 
         if (fn is JinjaNamespace ns)
         {
@@ -237,9 +243,6 @@ internal sealed class JinjaEvaluator
 
         if (fn is string fnName)
             return EvalMethodCall(fnName, args.Count > 0 ? args[0] : null, args.Skip(1).ToList(), kwargs);
-
-        if (fn is string fnName2 && fnName2 == "raise_exception")
-            throw new InvalidOperationException(args.FirstOrDefault()?.ToString() ?? "Template error");
 
         return fn;
     }
@@ -504,13 +507,22 @@ internal sealed class JinjaEvaluator
         ["reject"] = args =>
         {
             var list = ToList(args[0]);
-            if (args.Length < 3) return list;
+            if (args.Length < 2) return list;
             var testName = args[1]?.ToString();
-            var testVal = args[2];
-            return list.Where(item =>
+            var testVal = args.Length > 2 ? args[2] : null;
+            return list.Where(item => testName switch
             {
-                if (testName == "equalto") return !Equals(item, testVal);
-                return true;
+                "equalto" => !Equals(item, testVal),
+                "defined" => item is null,
+                "undefined" => item is not null,
+                "none" => item is not null,
+                "string" => item is not string,
+                "number" => item is not (int or float or double or long),
+                "mapping" => item is not Dictionary<string, object?>,
+                "iterable" => item is not (List<object?> or object?[]),
+                "true" => !IsTruthy(item),
+                "false" => IsTruthy(item),
+                _ => true,
             }).ToList();
         },
         ["first"] = args =>
@@ -554,6 +566,156 @@ internal sealed class JinjaEvaluator
             var old = args.Length > 1 ? args[1]?.ToString() ?? "" : "";
             var @new = args.Length > 2 ? args[2]?.ToString() ?? "" : "";
             return s.Replace(old, @new);
+        },
+        ["map"] = args =>
+        {
+            var list = ToList(args[0]);
+            if (args.Length > 1)
+            {
+                var arg = args[1]?.ToString();
+                if (arg is not null)
+                {
+                    // Known filter names take priority over attribute lookup
+                    var isFilter = arg is "upper" or "lower" or "trim" or "string" or "int" or "float"
+                        or "title" or "capitalize" or "abs" or "round" or "length" or "tojson";
+                    if (isFilter)
+                    {
+                        return (object?)list.Select(item => arg switch
+                        {
+                            "upper" => item?.ToString()?.ToUpperInvariant(),
+                            "lower" => item?.ToString()?.ToLowerInvariant(),
+                            "trim" => item?.ToString()?.Trim(),
+                            "string" => Stringify(item),
+                            "int" => (object?)(int)ToDouble(item),
+                            "float" => (object?)ToDouble(item),
+                            "title" => (object?)CultureInfo.InvariantCulture.TextInfo.ToTitleCase(item?.ToString()?.ToLowerInvariant() ?? ""),
+                            "capitalize" => (object?)((item?.ToString() ?? "") is var cs && cs.Length > 0 ? char.ToUpperInvariant(cs[0]) + cs[1..].ToLowerInvariant() : cs),
+                            "abs" => (object?)Math.Abs(ToDouble(item)),
+                            "round" => (object?)Math.Round(ToDouble(item)),
+                            "length" => (object?)ToList(item).Count,
+                            "tojson" => (object?)ToJson(item),
+                            _ => item,
+                        }).ToList();
+                    }
+                    // Otherwise treat as attribute name
+                    return (object?)list.Select(item => GetAttr(item, arg)).ToList();
+                }
+            }
+            return (object?)list;
+        },
+        ["selectattr"] = args =>
+        {
+            var list = ToList(args[0]);
+            if (args.Length < 2) return list;
+            var attrName = args[1]?.ToString() ?? "";
+            var testName = args.Length > 2 ? args[2]?.ToString() ?? "true" : "true";
+            var testVal = args.Length > 3 ? args[3] : null;
+            return list.Where(item =>
+            {
+                var attrVal = GetAttr(item, attrName);
+                return testName switch
+                {
+                    "equalto" => Equals(attrVal, testVal),
+                    "defined" => attrVal is not null,
+                    "undefined" => attrVal is null,
+                    "none" => attrVal is null,
+                    "string" => attrVal is string,
+                    "number" => attrVal is int or float or double or long,
+                    "true" => IsTruthy(attrVal),
+                    "false" => !IsTruthy(attrVal),
+                    _ => IsTruthy(attrVal),
+                };
+            }).ToList();
+        },
+        ["rejectattr"] = args =>
+        {
+            var list = ToList(args[0]);
+            if (args.Length < 2) return list;
+            var attrName = args[1]?.ToString() ?? "";
+            var testName = args.Length > 2 ? args[2]?.ToString() ?? "true" : "true";
+            var testVal = args.Length > 3 ? args[3] : null;
+            return list.Where(item =>
+            {
+                var attrVal = GetAttr(item, attrName);
+                return testName switch
+                {
+                    "equalto" => !Equals(attrVal, testVal),
+                    "defined" => attrVal is null,
+                    "undefined" => attrVal is not null,
+                    "none" => attrVal is not null,
+                    "string" => attrVal is not string,
+                    "number" => attrVal is not (int or float or double or long),
+                    "true" => !IsTruthy(attrVal),
+                    "false" => IsTruthy(attrVal),
+                    _ => !IsTruthy(attrVal),
+                };
+            }).ToList();
+        },
+        ["unique"] = args =>
+        {
+            var list = ToList(args[0]);
+            var seen = new HashSet<object?>(ObjectEqualityComparer.Instance);
+            return list.Where(item => seen.Add(item)).ToList();
+        },
+        ["sort"] = args =>
+        {
+            var list = ToList(args[0]);
+            var reverse = args.Length > 1 && IsTruthy(args[1]);
+            var sorted = list.OrderBy(x => x, ObjectComparer.Instance).ToList();
+            if (reverse) sorted.Reverse();
+            return (object?)sorted;
+        },
+        ["reverse"] = args =>
+        {
+            var list = ToList(args[0]);
+            var reversed = new List<object?>(list);
+            reversed.Reverse();
+            return (object?)reversed;
+        },
+        ["count"] = args => args[0] switch
+        {
+            List<object?> l => l.Count,
+            object?[] a => a.Length,
+            string s => s.Length,
+            Dictionary<string, object?> d => d.Count,
+            _ => 0,
+        },
+        ["int"] = args => (object?)(int)ToDouble(args[0]),
+        ["float"] = args => (object?)ToDouble(args[0]),
+        ["abs"] = args => (object?)Math.Abs(ToDouble(args[0])),
+        ["round"] = args =>
+        {
+            var value = ToDouble(args[0]);
+            var precision = args.Length > 1 ? (int)ToDouble(args[1]) : 0;
+            return (object?)Math.Round(value, precision);
+        },
+        ["indent"] = args =>
+        {
+            var text = args[0]?.ToString() ?? "";
+            var width = args.Length > 1 ? (int)ToDouble(args[1]) : 4;
+            var indentFirst = args.Length > 2 && IsTruthy(args[2]);
+            var pad = new string(' ', width);
+            var lines = text.Split('\n');
+            var sb = new StringBuilder();
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (i > 0) sb.Append('\n');
+                if ((i > 0 || indentFirst) && lines[i].Length > 0)
+                    sb.Append(pad);
+                sb.Append(lines[i]);
+            }
+            return (object?)sb.ToString();
+        },
+        ["title"] = args =>
+        {
+            var s = args[0]?.ToString() ?? "";
+            return (object?)System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(s);
+        },
+        ["capitalize"] = args =>
+        {
+            var s = args[0]?.ToString() ?? "";
+            if (s.Length == 0) return (object?)s;
+            return (object?)(char.ToUpperInvariant(s[0]) + s[1..].ToLowerInvariant());
         },
     };
 
@@ -635,5 +797,18 @@ internal sealed class JinjaEvaluator
         }
 
         public Scope Push() => new(this);
+    }
+
+    private sealed class ObjectEqualityComparer : IEqualityComparer<object?>
+    {
+        public static readonly ObjectEqualityComparer Instance = new();
+        public new bool Equals(object? x, object? y) => JinjaEvaluator.Equals(x, y);
+        public int GetHashCode(object? obj) => obj?.GetHashCode() ?? 0;
+    }
+
+    private sealed class ObjectComparer : IComparer<object?>
+    {
+        public static readonly ObjectComparer Instance = new();
+        public int Compare(object? x, object? y) => JinjaEvaluator.Compare(x, y);
     }
 }
