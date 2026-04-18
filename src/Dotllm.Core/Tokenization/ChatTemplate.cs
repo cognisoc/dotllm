@@ -58,6 +58,15 @@ public sealed class ChatTemplate
             ["bos_token"] = _bosToken,
             ["eos_token"] = _eosToken,
             ["add_generation_prompt"] = true,
+            ["namespace"] = (Func<object?[], Dictionary<string, object?>, object?>)((args, kwargs) =>
+            {
+                var ns = new JinjaNamespace();
+                foreach (var kv in kwargs)
+                    ns[kv.Key] = kv.Value;
+                return ns;
+            }),
+            ["keep_past_thinking"] = false,
+            ["tools"] = null,
         };
     }
 

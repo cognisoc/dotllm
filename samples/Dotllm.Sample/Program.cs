@@ -64,6 +64,8 @@ public static class Program
         Console.WriteLine($"  Chat template: {(model.ChatTemplate is not null ? "yes" : "no")}");
         Console.WriteLine($"  QDim: {model.Config.QDim}, KvDim: {model.Config.KvDim}, HeadDim: {model.Config.HeadDim}");
         Console.WriteLine($"  FfnDim: {model.Config.FfnDim}, FfnType: {model.Config.FfnType}");
+        Console.WriteLine($"  TiedEmbeddings: {model.Config.TiedEmbeddings}, EmbeddingScale: {model.Config.EmbeddingScale}");
+        Console.WriteLine($"  RopeFreqBase: {model.Config.RopeFreqBase}, RopeDimCount: {model.Config.RopeDimensionCount}");
         Console.WriteLine($"  BOS: {model.Config.BosTokenId}, EOS: {model.Config.EosTokenId}");
         if (model.Config.HeadCountKvPerLayer.Count > 0)
             Console.WriteLine($"  HeadCountKvPerLayer: [{string.Join(", ", model.Config.HeadCountKvPerLayer)}]");

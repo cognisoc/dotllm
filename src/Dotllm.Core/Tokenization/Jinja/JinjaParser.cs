@@ -119,10 +119,21 @@ internal sealed class JinjaParser
     private SetNode ParseSet()
     {
         var name = Expect(JinjaTokenType.Identifier).Value;
+
+        if (Current().Type == JinjaTokenType.Dot)
+        {
+            Advance();
+            var attr = Expect(JinjaTokenType.Identifier).Value;
+            Expect(JinjaTokenType.Assign);
+            var value = ParseExpression();
+            Expect(JinjaTokenType.StatementEnd);
+            return new SetNode(name, attr, value);
+        }
+
         Expect(JinjaTokenType.Assign);
-        var value = ParseExpression();
+        var val = ParseExpression();
         Expect(JinjaTokenType.StatementEnd);
-        return new SetNode(name, value);
+        return new SetNode(name, val);
     }
 
     private List<JinjaNode> ParseBody(params JinjaTokenType[] stopTokens)
@@ -238,6 +249,20 @@ internal sealed class JinjaParser
             left = new BinOpExpr(op, left, right);
         }
 
+        if (Current().Type == JinjaTokenType.In)
+        {
+            Advance();
+            var right = ParseConcat();
+            left = new BinOpExpr("in", left, right);
+        }
+        else if (Current().Type == JinjaTokenType.Not && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == JinjaTokenType.In)
+        {
+            Advance();
+            Advance();
+            var right = ParseConcat();
+            left = new BinOpExpr("not in", left, right);
+        }
+
         if (Current().Type == JinjaTokenType.Is)
         {
             Advance();
@@ -338,9 +363,29 @@ internal sealed class JinjaParser
             else if (Current().Type == JinjaTokenType.LBracket)
             {
                 Advance();
-                var key = ParseExpression();
-                Expect(JinjaTokenType.RBracket);
-                expr = new GetItemExpr(expr, key);
+                if (Current().Type == JinjaTokenType.Colon)
+                {
+                    Advance();
+                    var end = Current().Type != JinjaTokenType.RBracket ? ParseExpression() : null;
+                    Expect(JinjaTokenType.RBracket);
+                    expr = new SliceExpr(expr, null, end);
+                }
+                else
+                {
+                    var key = ParseExpression();
+                    if (Current().Type == JinjaTokenType.Colon)
+                    {
+                        Advance();
+                        var end = Current().Type != JinjaTokenType.RBracket ? ParseExpression() : null;
+                        Expect(JinjaTokenType.RBracket);
+                        expr = new SliceExpr(expr, key, end);
+                    }
+                    else
+                    {
+                        Expect(JinjaTokenType.RBracket);
+                        expr = new GetItemExpr(expr, key);
+                    }
+                }
             }
             else if (Current().Type == JinjaTokenType.LParen)
             {

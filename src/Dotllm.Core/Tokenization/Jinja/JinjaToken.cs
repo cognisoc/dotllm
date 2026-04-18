@@ -54,6 +54,7 @@ internal enum JinjaTokenType
     Set,
     Is,
     Eof,
+    NotIn,
 }
 
 internal sealed class JinjaToken

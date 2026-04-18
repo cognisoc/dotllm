@@ -49,11 +49,19 @@ internal sealed class ForNode : JinjaNode
 internal sealed class SetNode : JinjaNode
 {
     public string Name { get; }
+    public string? Attr { get; }
     public JinjaExpr Value { get; }
 
     public SetNode(string name, JinjaExpr value)
     {
         Name = name;
+        Value = value;
+    }
+
+    public SetNode(string name, string attr, JinjaExpr value)
+    {
+        Name = name;
+        Attr = attr;
         Value = value;
     }
 }
@@ -138,4 +146,18 @@ internal sealed class ConcatExpr : JinjaExpr
     public JinjaExpr Left { get; }
     public JinjaExpr Right { get; }
     public ConcatExpr(JinjaExpr left, JinjaExpr right) { Left = left; Right = right; }
+}
+
+internal sealed class SliceExpr : JinjaExpr
+{
+    public JinjaExpr Object { get; }
+    public JinjaExpr? Start { get; }
+    public JinjaExpr? End { get; }
+
+    public SliceExpr(JinjaExpr obj, JinjaExpr? start, JinjaExpr? end)
+    {
+        Object = obj;
+        Start = start;
+        End = end;
+    }
 }

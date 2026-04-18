@@ -3,6 +3,8 @@ using System.Text;
 
 namespace Dotllm.Tokenization.Jinja;
 
+internal sealed class JinjaNamespace : Dictionary<string, object?>;
+
 internal sealed class JinjaEvaluator
 {
     private readonly Dictionary<string, object?> _globals;
@@ -40,7 +42,20 @@ internal sealed class JinjaEvaluator
             case ForNode forNode:
                 return EvalFor(forNode, scope);
             case SetNode setNode:
-                scope[setNode.Name] = EvalExpr(setNode.Value, scope);
+                if (setNode.Attr is not null)
+                {
+                    var ns = scope[setNode.Name];
+                    if (ns is JinjaNamespace namespaceObj)
+                        namespaceObj[setNode.Attr] = EvalExpr(setNode.Value, scope);
+                    else if (ns is Dictionary<string, object?> dict)
+                        dict[setNode.Attr] = EvalExpr(setNode.Value, scope);
+                    else
+                        scope[setNode.Name] = EvalExpr(setNode.Value, scope);
+                }
+                else
+                {
+                    scope[setNode.Name] = EvalExpr(setNode.Value, scope);
+                }
                 return "";
             default:
                 throw new InvalidOperationException($"Unknown node type: {node.GetType().Name}");
@@ -128,6 +143,8 @@ internal sealed class JinjaEvaluator
                 return EvalCall(call, scope);
             case ConcatExpr concat:
                 return Stringify(EvalExpr(concat.Left, scope)) + Stringify(EvalExpr(concat.Right, scope));
+            case SliceExpr slice:
+                return EvalSlice(slice, scope);
             default:
                 throw new InvalidOperationException($"Unknown expression type: {expr.GetType().Name}");
         }
@@ -157,6 +174,8 @@ internal sealed class JinjaEvaluator
             ">" => Compare(left, right) > 0,
             "<=" => Compare(left, right) <= 0,
             ">=" => Compare(left, right) >= 0,
+            "in" => Contains(right, left),
+            "not in" => !Contains(right, left),
             _ => throw new InvalidOperationException($"Unknown operator: {bin.Op}"),
         };
     }
@@ -203,8 +222,12 @@ internal sealed class JinjaEvaluator
         if (fn is Delegate del)
             return del.DynamicInvoke([args.ToArray(), kwargs]);
 
-        if (fn is string fnName && fnName == "raise_exception")
-            throw new InvalidOperationException(args.FirstOrDefault()?.ToString() ?? "Template error");
+        if (fn is JinjaNamespace ns)
+        {
+            foreach (var kv in kwargs)
+                ns[kv.Key] = kv.Value;
+            return ns;
+        }
 
         if (fn is Dictionary<string, object?> dict)
         {
@@ -212,7 +235,117 @@ internal sealed class JinjaEvaluator
                 return dict.TryGetValue(key, out var v) ? v : null;
         }
 
+        if (fn is string fnName)
+            return EvalMethodCall(fnName, args.Count > 0 ? args[0] : null, args.Skip(1).ToList(), kwargs);
+
+        if (fn is string fnName2 && fnName2 == "raise_exception")
+            throw new InvalidOperationException(args.FirstOrDefault()?.ToString() ?? "Template error");
+
         return fn;
+    }
+
+    private static object? EvalMethodCall(string methodName, object? obj, List<object?> args, Dictionary<string, object?> kwargs)
+    {
+        if (obj is string s)
+        {
+            if (methodName == "split")
+            {
+                var separator = args.Count > 0 ? args[0]?.ToString() ?? "" : null;
+                var parts = separator is null ? s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries) : s.Split(separator, StringSplitOptions.None);
+                return parts.Select(p => (object?)p).ToList();
+            }
+            if (methodName == "strip")
+                return s.Trim();
+            if (methodName == "lower")
+                return s.ToLowerInvariant();
+            if (methodName == "upper")
+                return s.ToUpperInvariant();
+            if (methodName == "startswith")
+                return args.Count > 0 && s.StartsWith(args[0]?.ToString() ?? "", StringComparison.Ordinal);
+            if (methodName == "endswith")
+                return args.Count > 0 && s.EndsWith(args[0]?.ToString() ?? "", StringComparison.Ordinal);
+            if (methodName == "replace")
+            {
+                var old = args.Count > 0 ? args[0]?.ToString() ?? "" : "";
+                var @new = args.Count > 1 ? args[1]?.ToString() ?? "" : "";
+                return s.Replace(old, @new);
+            }
+        }
+
+        if (obj is List<object?> list)
+        {
+            if (methodName == "append" && args.Count > 0)
+            {
+                list.Add(args[0]);
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private List<object?>? EvalSlice(SliceExpr slice, Scope scope)
+    {
+        var obj = EvalExpr(slice.Object, scope);
+        var start = slice.Start is not null ? EvalExpr(slice.Start, scope) : null;
+        var end = slice.End is not null ? EvalExpr(slice.End, scope) : null;
+
+        var startIdx = start switch
+        {
+            int i => i,
+            long l => (int)l,
+            null => 0,
+            _ => 0,
+        };
+
+        if (obj is List<object?> list)
+        {
+            var endIdx = end switch
+            {
+                int i => i,
+                long l => (int)l,
+                null => list.Count,
+                _ => list.Count,
+            };
+
+            if (startIdx < 0) startIdx = list.Count + startIdx;
+            if (endIdx < 0) endIdx = list.Count + endIdx;
+            startIdx = Math.Max(0, Math.Min(startIdx, list.Count));
+            endIdx = Math.Max(0, Math.Min(endIdx, list.Count));
+            return list.Skip(startIdx).Take(endIdx - startIdx).ToList();
+        }
+
+        if (obj is object?[] arr)
+        {
+            var endIdx = end switch
+            {
+                int i => i,
+                long l => (int)l,
+                null => arr.Length,
+                _ => arr.Length,
+            };
+
+            if (startIdx < 0) startIdx = arr.Length + startIdx;
+            if (endIdx < 0) endIdx = arr.Length + endIdx;
+            startIdx = Math.Max(0, Math.Min(startIdx, arr.Length));
+            endIdx = Math.Max(0, Math.Min(endIdx, arr.Length));
+            return arr[startIdx..endIdx].ToList();
+        }
+
+        return null;
+    }
+
+    private static bool Contains(object? container, object? item)
+    {
+        if (container is string s && item is string sub)
+            return s.Contains(sub);
+        if (container is List<object?> list)
+            return list.Any(x => Equals(x, item));
+        if (container is object?[] arr)
+            return arr.Any(x => Equals(x, item));
+        if (container is Dictionary<string, object?> dict && item is string key)
+            return dict.ContainsKey(key);
+        return false;
     }
 
     private static object? GetAttr(object? obj, string attr)
@@ -221,6 +354,24 @@ internal sealed class JinjaEvaluator
 
         if (obj is Dictionary<string, object?> dict)
             return dict.TryGetValue(attr, out var val) ? val : null;
+
+        if (obj is JinjaNamespace ns)
+            return ns.TryGetValue(attr, out var val) ? val : null;
+
+        if (obj is string s)
+        {
+            return attr switch
+            {
+                "split" => "split",
+                "strip" => "strip",
+                "lower" => "lower",
+                "upper" => "upper",
+                "startswith" => "startswith",
+                "endswith" => "endswith",
+                "replace" => "replace",
+                _ => null,
+            };
+        }
 
         return null;
     }
@@ -389,13 +540,13 @@ internal sealed class JinjaEvaluator
         {
             var val = args[0];
             var defaultVal = args.Length > 1 ? args[1] : "";
-            return IsTruthy(val) ? val : defaultVal;
+            return val is not null ? val : defaultVal;
         },
         ["d"] = args =>
         {
             var val = args[0];
             var defaultVal = args.Length > 1 ? args[1] : "";
-            return IsTruthy(val) ? val : defaultVal;
+            return val is not null ? val : defaultVal;
         },
         ["replace"] = args =>
         {
